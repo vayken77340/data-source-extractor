@@ -41,6 +41,24 @@ working directory.
 `python -m pytest` works regardless — [`conftest.py`](conftest.py) puts `src` on the path
 itself, so a fresh clone can run the tests before any of the above.
 
+### Behind a corporate proxy
+
+Nothing to configure for certificates: TLS is verified against the **operating system's
+trust store** rather than certifi's public-CA bundle, so the internal root your IT
+department installed is already trusted. Without that, a TLS-inspecting proxy — which
+re-signs every certificate — fails with `unable to get local issuer certificate`.
+
+Proxy settings go in `.env` alongside your credentials; httpx reads them itself and `.env`
+is loaded before any request is built:
+
+```
+HTTPS_PROXY=http://proxy.example.com:8080
+NO_PROXY=localhost,127.0.0.1
+```
+
+If you hit a certificate error anyway, do **not** reach for `verify=False`. That does not
+fix trust, it removes it — on a network that is already inspecting your traffic.
+
 ## Running
 
 ```bash

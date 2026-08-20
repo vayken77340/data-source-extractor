@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import email.utils
 import json
+import ssl
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import truststore
 from tenacity import (
     Retrying,
     retry_if_exception_type,
@@ -30,6 +32,25 @@ log = get_logger(__name__)
 
 RETRY_STATUSES = frozenset({429})
 MAX_RETRY_AFTER = 300.0
+
+
+def default_ssl_context() -> ssl.SSLContext:
+    """Verify against the operating system's trust store, not certifi's bundle.
+
+    httpx defaults to certifi, which ships public root CAs only. Behind a TLS-inspecting
+    corporate proxy every certificate is re-signed by an internal root, and an internal API
+    may be signed by a private CA — neither is in certifi, so verification fails with
+    "unable to get local issuer certificate". The OS store has them, because IT put them
+    there.
+
+    Note what this does *not* do: verification stays fully on. `verify=False` would make
+    the error go away by making the connection interceptable, which is the opposite of what
+    is wanted on a network that is already inspecting traffic.
+
+    Proxy settings are read from `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` by httpx itself.
+    `load_dotenv()` runs before the client is built, so `.env` is a fine place for them.
+    """
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 @dataclass(frozen=True)
@@ -98,7 +119,9 @@ class Client:
     ) -> None:
         self._retries = retries
         self._min_interval = 1.0 / rate_limit if rate_limit else 0.0
-        self._client = client or httpx.Client(follow_redirects=True)
+        self._client = client or httpx.Client(
+            follow_redirects=True, verify=default_ssl_context()
+        )
         self._owns_client = client is None
         self._last_sent: float | None = None
 

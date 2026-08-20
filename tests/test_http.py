@@ -19,6 +19,24 @@ def no_real_sleeping(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
 
 
+def test_tls_verifies_against_the_os_trust_store():
+    """certifi ships public roots only; a corporate proxy re-signs with an internal one.
+
+    Verification stays on — this changes which trust anchors are used, not whether the
+    certificate is checked.
+    """
+    import ssl
+
+    import truststore
+
+    from api_extractor.http.client import default_ssl_context
+
+    context = default_ssl_context()
+    assert isinstance(context, truststore.SSLContext)
+    assert context.verify_mode is ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
 def test_a_plain_get(httpx_mock, client):
     httpx_mock.add_response(url=URL, json={"data": [1, 2]})
     response = client.send(Request(method="GET", url=URL))

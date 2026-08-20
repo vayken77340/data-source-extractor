@@ -54,8 +54,15 @@ If a task starts to feel like a workflow engine, stop and flag it rather than bu
   put on the venv's path with a one-line `.pth` file so `python -m api_extractor` works —
   see README §Setup. `python -m pytest` needs nothing, because the root `conftest.py`
   handles it.
-- Framework dependencies: `httpx`, `pydantic` v2, `pyyaml`, `jsonpath-ng`, `typer`,
-  `python-dotenv`, `tenacity`. Dev: `pytest`, `pytest-httpx`.
+- Framework dependencies: `httpx`, `truststore`, `pydantic` v2, `pyyaml`, `jsonpath-ng`,
+  `typer`, `python-dotenv`, `tenacity`. Dev: `pytest`, `pytest-httpx`.
+- **`truststore` is not optional.** httpx verifies against certifi, which ships public root
+  CAs only. Behind a TLS-inspecting corporate proxy every certificate is re-signed by an
+  internal root that certifi has never heard of, so verification fails. The OS trust store
+  has that root. `verify=False` would also make the error go away, by making the connection
+  interceptable on a network that is already inspecting traffic — never do that.
+  Proxy settings come from `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`, which httpx reads
+  itself; `.env` is loaded before the client is built, so they can live there.
 - `openpyxl` is in `requirements.txt` but is **not the framework's** — it belongs to
   `providers/excel_column.py`. If that provider goes, so does the dependency.
 - No Airflow, Dagster, Prefect, pandas, or any ORM.

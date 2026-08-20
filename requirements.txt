@@ -1,4 +1,5 @@
 httpx>=0.27
+truststore>=0.9    # verify against the OS trust store, not certifi's public-CA bundle
 pydantic>=2.7
 pyyaml>=6.0
 openpyxl>=3.1     # not the framework's — needed by providers/excel_column.py
