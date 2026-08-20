@@ -1,0 +1,204 @@
+# ══ Source definition template ═══════════════════════════════════════════════
+#
+# Copy to config/sources/<name>.yaml, then delete everything you don't need.
+#
+# Every block that is *live* here is checked by tests/test_template.py, so if it
+# appears uncommented it parses and validates. Blocks that cannot coexist (the
+# five auth types) are shown commented.
+#
+#   api-extractor validate <name>       # run this before every first run
+#   api-extractor list-sources
+#
+# One YAML trap, worth knowing once: inside flow style `{ }`, a plain scalar may
+# not contain `[ ] { }` or `,`. `path: $.data[*].id` is a parse error, and
+# `keys: a,b` silently becomes `{keys: a, b: null}`. Quote those.
+
+source: my_source                      # should match the filename
+base_url: https://api.example.com/v1
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+# Exactly one block. Secrets are only ever `env:` references — never literals,
+# and every referenced var must be set or validation fails before any request.
+
+auth:
+  type: basic                          # Authorization: Basic base64(user:pass)
+  username: env:MY_USER
+  password: env:MY_PASSWORD
+
+# auth:
+#   type: bearer                       # Authorization: Bearer <token>
+#   token: env:MY_TOKEN
+#   apply: { header: Authorization, template: "Bearer {token}" }   # optional, this is the default
+
+# auth:
+#   type: header                       # one or more static credential headers
+#   headers:
+#     X-API-Key: env:MY_API_KEY                                      # sent as-is
+#     X-Authorization: { value: env:MY_API_KEY, template: "ApiKey {value}" }
+#     X-Other-APIKey: env:MY_OTHER_KEY
+#   # A bare string means "send the value as-is". Use {value, template} to wrap
+#   # it — the template must contain {value} and nothing else, or the secret
+#   # would be silently dropped and every request would 401.
+
+# auth:
+#   type: oauth_client_credentials
+#   token_url: https://api.example.com/oauth/token
+#   client_id: env:MY_CLIENT_ID
+#   client_secret: env:MY_CLIENT_SECRET
+#   scope: read:things                 # optional
+#   token_path: $.access_token         # optional, this is the default
+#   apply: { header: Authorization, template: "Bearer {token}" }
+
+# auth:
+#   type: login_token                  # POST credentials, read a token out of the response
+#   request:
+#     method: POST
+#     path: /auth/login
+#     payload: { username: env:MY_USER, password: env:MY_PASSWORD }
+#     query: {}                        # optional
+#     headers: {}                      # optional
+#   token_path: $.token
+#   apply: { header: X-Authorization, template: "Bearer {token}" }
+
+# ── Defaults ─────────────────────────────────────────────────────────────────
+# Applied to every endpoint. All optional; the values below are the built-ins.
+
+defaults:
+  headers: { Accept: application/json }
+  timeout: 30                  # seconds, whole request
+  retries: 2                   # 429 and 5xx only — other 4xx are never retried
+  rate_limit: 5                # requests/second across the source; omit for no throttling
+  limit: 5                     # sampling cap: max values fanned out per endpoint
+  max_pages: 20                # hard cap per pagination walk, whatever the stop condition says
+  output: output/{source}/{endpoint}/{slug}.json
+
+# ── Providers ────────────────────────────────────────────────────────────────
+# A provider is a source of values for a parameter. It always yields rows
+# (dicts), never bare scalars — so one provider can fill several params at once
+# and keep them correlated. YAML supplies args, never code.
+
+providers:
+
+  regions:                     # values written inline
+    fn: literal
+    args:
+      values:
+        - { region: EU, tier: gold }
+        - { region: US, tier: silver }
+
+  asset_types:                 # one or more columns off a spreadsheet
+    fn: excel_column           # blanks dropped, deduped, order preserved
+    args:
+      path: input/asset_types.xlsx
+      sheet: Referentiel
+      columns: [assetType]     # several columns stay row-wise together
+
+  asset_ids:                   # values read back out of a previous endpoint
+    fn: from_output
+    args:
+      endpoint: assets         # naming an endpoint here is what creates the dependency
+      path: "$.data[*].id.id"  # quoted — see the YAML trap at the top
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+# `{from: provider}` is the only special marker. Everything else in query,
+# payload and bind is a literal, at any nesting depth.
+#
+# There is no depends_on key: `measures` runs after `assets` because `asset_ids`
+# names it. Order is derived, and a cycle is a validation error.
+
+endpoints:
+
+  # The simplest shape: nothing to resolve.
+  ping:
+    method: GET
+    path: /ping
+
+  # Static query params alongside one bound to a provider.
+  alarms:
+    method: GET
+    path: /alarms
+    query:
+      pageSize: 100
+      searchStatus: ACTIVE
+      type: { from: asset_types }
+    output: output/{source}/alarms/{type}.json
+
+  # Markers nest arbitrarily deep, including inside lists.
+  #
+  # A param is named by its nearest enclosing key — so the marker under
+  # `filters[0].value` would be called `value`, which is useless; `as` renames
+  # it. Two markers resolving to the same name is a validation error.
+  #
+  # `region` and `tier` both come from `regions`, so they stay row-wise: you get
+  # (EU, gold) and (US, silver), never the cross product. Fields from one
+  # provider are already correlated and are never re-combined.
+  assets:
+    method: POST
+    path: /assets/search
+    payload:
+      pageSize: 100
+      filters:
+        - key: assetType
+          value: { from: asset_types, as: assetType }
+      scope:
+        region: { from: regions }
+        tier: { from: regions }
+    fan_out: product           # cartesian across *separate* providers (default)
+    paginate: { style: page_number, at: payload.page, has_more: $.hasNext }
+    output: output/{source}/assets/{assetType}_{region}_p{page}.json
+
+  # Chained off `assets`, with the id landing in the path.
+  #
+  # `bind` and `query` feed the same resolution step — `bind` is just where you
+  # put values destined for the path template. Every {placeholder} in `path`
+  # needs a bind entry and vice versa. `as` is rejected here: the key is already
+  # the param name and must match the placeholder.
+  measures:
+    method: GET
+    path: /assets/{id}/measures
+    bind:
+      id: { from: asset_ids }
+    query: { keys: "temperature,humidity" }
+    limit: 20                  # overrides defaults.limit for this endpoint
+    output: output/{source}/measures/{id}.json
+
+  # `zip` pairs separate providers positionally instead of crossing them.
+  # Unequal lengths raise rather than truncating silently.
+  paired:
+    method: GET
+    path: /paired
+    query:
+      region: { from: regions }
+      assetType: { from: asset_types }
+    fan_out: zip
+    limit: null                # explicit null = unlimited (absent = inherit the default)
+
+  # ── Pagination ─────────────────────────────────────────────────────────────
+  # One file per page, always — pages are never merged into one array, because
+  # merging destroys the record of which page a row came from.
+  #
+  # `at` is a dotted path saying where the page number goes: a query param, or
+  # any depth inside the body. It starts at `start` (default 0) and increments.
+  # The walk stops when `has_more` is falsy, or on an empty page if you leave
+  # `has_more` out — and defaults.max_pages caps it either way.
+  #
+  # Page *size* is not a pagination concept. Write it as an ordinary literal
+  # wherever the API expects it, as below.
+
+  paged_in_query:              # ?page=0&per_page=100
+    method: GET
+    path: /things
+    query:
+      per_page: 100            # ordinary literal
+    paginate: { style: page_number, at: query.page, has_more: $.has_next }
+    output: output/{source}/things/p{page}.json
+
+  paged_in_payload:            # {"pageLink": {"page": 0, "pageSize": 100, ...}}
+    method: POST
+    path: /things/search
+    payload:
+      pageLink:
+        pageSize: 100          # ordinary literal
+        sortOrder: { property: name, direction: ASC }
+    paginate: { style: page_number, at: payload.pageLink.page, has_more: $.hasNext }
+    output: output/{source}/things/search_p{page}.json

@@ -1,0 +1,16 @@
+# Secrets and credentials
+.env
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Real data — output samples are production responses, not just structure
+output/
+input/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/

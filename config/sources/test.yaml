@@ -1,0 +1,61 @@
+source: test
+base_url: https://tb.example.com/api
+
+auth:
+  # Basic auth on every request: Authorization: Basic base64(user:pass).
+  # No login step, no token exchange.
+  type: basic
+  username: env:TB_USER
+  password: env:TB_PASSWORD
+
+defaults:
+  headers: { Accept: application/json }
+  timeout: 30
+  retries: 2
+  rate_limit: 5            # requests/second, source-wide
+  limit: 5                 # sampling cap: max values fanned out per endpoint
+  max_pages: 20            # hard stop per pagination walk
+  output: output/{source}/{endpoint}/{slug}.json
+
+providers:
+  asset_types:
+    fn: excel_column
+    args: { path: input/asset_types.xlsx, sheet: Referentiel, columns: [assetType] }
+  asset_ids:
+    fn: from_output
+    # Quoted: inside a flow mapping, `[` `]` `,` may not appear in a plain scalar.
+    args: { endpoint: assets, path: "$.data[*].id.id" }
+
+endpoints:
+
+  tenant_info:                          # plain GET, nothing to resolve
+    method: GET
+    path: /tenant/info
+
+  alarms:                               # GET, static + bound query params
+    method: GET
+    path: /alarms
+    query:
+      pageSize: 100
+      searchStatus: ACTIVE
+      type: { from: asset_types }
+    output: output/{source}/alarms/{type}.json
+
+  assets:                               # POST, payload from Excel
+    method: POST
+    path: /assets/search
+    payload:
+      assetType: { from: asset_types }
+      pageSize: 100
+    fan_out: product
+    paginate: { style: page_number, at: payload.page, has_more: $.hasNext }
+    output: output/{source}/assets/{assetType}_p{page}.json
+
+  measures:                             # GET chained off `assets`, id in path
+    method: GET
+    path: /assets/{id}/measures
+    bind:
+      id: { from: asset_ids }
+    query: { keys: "temperature,humidity" }   # quoted, else YAML reads `humidity` as a key
+    limit: 20
+    output: output/{source}/measures/{id}.json
