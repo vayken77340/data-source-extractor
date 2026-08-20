@@ -10,6 +10,7 @@ startup, so there is no import list to maintain.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -67,11 +68,15 @@ def load_from(directory: Path = PROVIDERS_DIR) -> list[str]:
     if not directory.is_dir():
         return []
 
+    # Scoped by directory, so two directories may hold a same-named file without one
+    # silently shadowing the other.
+    scope = hashlib.sha256(str(directory.resolve()).encode("utf-8")).hexdigest()[:8]
+
     loaded: list[str] = []
     for path in sorted(directory.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        module_name = f"{_MODULE_PREFIX}.{path.stem}"
+        module_name = f"{_MODULE_PREFIX}.{scope}.{path.stem}"
         if module_name in sys.modules:
             continue
         spec = importlib.util.spec_from_file_location(module_name, path)

@@ -157,7 +157,7 @@ def test_basic_auth_shape():
     source = Source.model_validate(yaml.safe_load(REFERENCE_SOURCE.read_text(encoding="utf-8")))
     assert source.auth is not None
     assert source.auth.type == "basic"
-    assert (source.auth.username, source.auth.password) == ("env:TB_USER", "env:TB_PASSWORD")
+    assert (source.auth.username, source.auth.password) == ("env:REF_USER", "env:REF_PASSWORD")
 
 
 def auth_source(auth: dict) -> Source:

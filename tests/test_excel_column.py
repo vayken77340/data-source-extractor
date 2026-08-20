@@ -11,15 +11,22 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
+from api_extractor import providers
 from api_extractor.providers import registry
 from api_extractor.providers.registry import ProviderContext
+from tests.conftest import REPO_ROOT
 
 CTX = ProviderContext(run_id="test-run", output_root=Path("output"), source_name="demo")
 
 
 @pytest.fixture(scope="module")
 def excel_column():
-    """Loaded by tests/conftest.py, exactly as the CLI loads it."""
+    """Reached through the registry, exactly as the runner reaches it.
+
+    This file is the one that owns the coupling to `providers/` — it is a test *of* that
+    provider, so if the provider goes, this goes with it.
+    """
+    providers.load_from(REPO_ROOT / "providers")
     return registry.get("excel_column").fn
 
 

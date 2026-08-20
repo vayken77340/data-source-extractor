@@ -16,10 +16,10 @@ from api_extractor.persist import envelope, manifest
 from api_extractor.providers.builtin import field_name, from_output
 from api_extractor.providers.registry import ProviderContext, SavedOutput
 from api_extractor.runner import execute, read_outputs, search_root
-from tests.conftest import REFERENCE_SOURCE
+from tests.conftest import REFERENCE_BASE_URL, REFERENCE_SOURCE
 
 BASE = "https://demo.example.com"
-TB = "https://tb.example.com/api"
+TB = REFERENCE_BASE_URL
 
 
 @pytest.fixture
@@ -171,17 +171,9 @@ def asset_page(asset_type: str, ids: list[str], has_next: bool) -> dict:
 
 
 @pytest.fixture
-def reference(monkeypatch, tmp_path):
+def reference(monkeypatch, tmp_path, reference_env):
+    """The suite's own source: asset types come from `literal`, so no file is needed."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TB_USER", "svc-account")
-    monkeypatch.setenv("TB_PASSWORD", "hunter2-hunter2")
-    (tmp_path / "input").mkdir()
-    workbook = pytest.importorskip("openpyxl").Workbook()
-    sheet = workbook.active
-    sheet.title = "Referentiel"
-    for value in ["assetType", "PUMP", "VALVE"]:
-        sheet.append([value])
-    workbook.save(tmp_path / "input" / "asset_types.xlsx")
     return load_source(REFERENCE_SOURCE)
 
 

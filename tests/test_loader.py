@@ -76,12 +76,12 @@ def test_a_secret_registered_without_a_var_name_is_unconditional():
 def test_iter_env_refs_finds_every_reference():
     source = load_source(REFERENCE_SOURCE)
     refs = dict(iter_env_refs(source))
-    assert refs == {"auth.username": "TB_USER", "auth.password": "TB_PASSWORD"}
+    assert refs == {"auth.username": "REF_USER", "auth.password": "REF_PASSWORD"}
 
 
 def test_parsed_config_holds_no_secrets(monkeypatch):
     """`env:` refs stay unresolved in the model, so the config is safe to print."""
-    monkeypatch.setenv("TB_PASSWORD", "hunter2-hunter2")
+    monkeypatch.setenv("REF_PASSWORD", "hunter2-hunter2")
     source = load_source(REFERENCE_SOURCE)
     assert source.auth is not None
-    assert source.auth.password == "env:TB_PASSWORD"
+    assert source.auth.password == "env:REF_PASSWORD"

@@ -1,3 +1,14 @@
+"""Shared fixtures.
+
+Nothing here reads `config/sources/`, `input/` or `providers/`. Those belong to whoever is
+using the tool, and a suite that depends on them breaks the moment a source is renamed or
+replaced with a real one. The tests own their own source, at `tests/fixtures/reference.yaml`.
+
+The two tests that *are* about project-owned files — `config/TEMPLATE.yaml` and
+`providers/excel_column.py` — load what they need themselves, so the reason is visible at
+the point of coupling.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,19 +16,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from api_extractor import providers
 from api_extractor.logs import forget_secrets
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = Path(__file__).parent / "fixtures"
 
-# The one complete source the suite runs end to end. Only this line names the file; the
-# name *inside* it is read from the parsed config, so renaming either is a one-line change.
-REFERENCE_SOURCE = REPO_ROOT / "config" / "sources" / "test.yaml"
+# The suite's own complete source. Owned here, so it changes only when a test needs it to.
+REFERENCE_SOURCE = FIXTURES / "reference.yaml"
 REFERENCE_NAME = REFERENCE_SOURCE.stem
-
-# The CLI does this at startup; tests that call the layers directly need it too, or
-# `excel_column` would be unregistered and the reference source would not validate.
-providers.load_from(REPO_ROOT / "providers")
+REFERENCE_BASE_URL = "https://ref.example.com/api"
+REFERENCE_ENV = {"REF_USER": "svc-account", "REF_PASSWORD": "hunter2-hunter2"}
 
 MINIMAL: dict = {
     "source": "demo",
@@ -31,6 +39,14 @@ def _clear_secrets():
     forget_secrets()
     yield
     forget_secrets()
+
+
+@pytest.fixture
+def reference_env(monkeypatch):
+    """The env vars `tests/fixtures/reference.yaml` refers to."""
+    for name, value in REFERENCE_ENV.items():
+        monkeypatch.setenv(name, value)
+    return REFERENCE_ENV
 
 
 @pytest.fixture

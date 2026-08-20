@@ -19,7 +19,7 @@ BROKEN = {
     "base_url": "https://x.example.com",
     "auth": {"type": "bearer", "token": "env:DEFINITELY_NOT_SET"},
     "providers": {
-        "types": {"fn": "excel_column", "args": {}},  # args_match: required args missing
+        "types": {"fn": "literal", "args": {}},  # args_match: `values` missing
         "unknown_fn": {"fn": "nope", "args": {}},  # fn_registered
         "orphan": {"fn": "from_output", "args": {"endpoint": "ghost", "path": "$.x"}},
         "loop_a": {"fn": "from_output", "args": {"endpoint": "g", "path": "$.x"}},
@@ -79,9 +79,7 @@ def messages(report) -> str:
 
 
 @pytest.fixture
-def env_set(monkeypatch):
-    monkeypatch.setenv("TB_USER", "svc-account")
-    monkeypatch.setenv("TB_PASSWORD", "hunter2-hunter2")
+def env_set(monkeypatch, reference_env):
     monkeypatch.delenv("DEFINITELY_NOT_SET", raising=False)
 
 
@@ -129,13 +127,13 @@ def test_unregistered_provider_function(env_set, write_source):
     report = validate_source(write_source(BROKEN, "broken"))
     text = messages(report)
     assert "providers.unknown_fn.fn: 'nope' is not a registered provider function" in text
-    assert "registered: excel_column, from_output, literal" in text
+    assert "from_output" in text and "literal" in text
 
 
 def test_provider_args_must_fit_the_function(env_set, write_source):
     report = validate_source(write_source(BROKEN, "broken"))
     text = messages(report)
-    assert "providers.types.args: do not fit excel_column(path, sheet, columns)" in text
+    assert "providers.types.args: do not fit literal(values)" in text
 
 
 def test_a_typo_in_provider_args_does_not_crash_depends_on(env_set, write_source):

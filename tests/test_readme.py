@@ -10,9 +10,9 @@ import re
 
 import pytest
 
+from api_extractor import providers
 from api_extractor.cli import app
 from api_extractor.config.validate import EXPECTED_CHECK_IDS
-from api_extractor.providers import registry
 from tests.conftest import REPO_ROOT
 
 README = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -30,8 +30,8 @@ def test_every_command_is_documented():
 
 
 def test_every_builtin_provider_is_documented():
-    names = {entry.name for entry in registry.registered()}
-    assert not [name for name in names if name not in README]
+    """BUILTINS, not everything registered — a test may have registered its own."""
+    assert not [name for name in providers.BUILTINS if name not in README]
 
 
 def test_the_dependency_files_are_documented():

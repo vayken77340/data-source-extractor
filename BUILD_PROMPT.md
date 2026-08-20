@@ -558,7 +558,18 @@ Two things the original order did not anticipate:
 
 ## 11. Testing
 
-263 tests. **No test makes a real network call** — `pytest-httpx` throughout.
+269 tests. **No test makes a real network call** — `pytest-httpx` throughout.
+
+**The suite owns its own data.** Nothing under `tests/` reads `config/sources/`, `input/`
+or `output/` — those belong to whoever is using the tool, and a suite that depends on them
+breaks the moment a source is renamed or replaced with a real one. It did, once, which is
+how this rule got written. The suite's complete source is `tests/fixtures/reference.yaml`,
+which uses only built-in providers so it needs no spreadsheet either. CLI tests build a
+throwaway project in `tmp_path` rather than running against the working tree.
+
+Two tests are *about* project-owned files — `config/TEMPLATE.yaml` and
+`providers/excel_column.py` — and load what they need themselves, so the coupling is
+visible at the point where it exists rather than hidden in a shared fixture.
 
 - Config: valid file parses; each validation rule has a failing fixture that produces a
   clear message. One deliberately broken source trips **every** registered check in a

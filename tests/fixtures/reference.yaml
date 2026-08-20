@@ -1,0 +1,70 @@
+# A complete source, owned by the test suite.
+#
+# Deliberately self-contained: it reads no file under input/, names no provider outside
+# the framework's built-ins, and lives nowhere near config/. Renaming, editing or deleting
+# your own sources must never break the suite.
+#
+# It covers all four endpoint shapes: a plain GET, a GET with a bound query param, a
+# paginated POST fanned out over a provider, and a GET chained off that POST's output.
+
+source: reference
+base_url: https://ref.example.com/api
+
+auth:
+  type: basic
+  username: env:REF_USER
+  password: env:REF_PASSWORD
+
+defaults:
+  headers: { Accept: application/json }
+  timeout: 30
+  retries: 2
+  rate_limit: 5
+  limit: 5
+  max_pages: 20
+  output: output/{source}/{endpoint}/{slug}.json
+
+providers:
+  asset_types:
+    fn: literal          # a built-in, so the suite owns its input too
+    args:
+      values:
+        - { assetType: PUMP }
+        - { assetType: VALVE }
+  asset_ids:
+    fn: from_output
+    args: { endpoint: assets, path: "$.data[*].id.id" }
+
+endpoints:
+
+  tenant_info:                          # plain GET, nothing to resolve
+    method: GET
+    path: /tenant/info
+
+  alarms:                               # GET, static + bound query params
+    method: GET
+    path: /alarms
+    query:
+      pageSize: 100
+      searchStatus: ACTIVE
+      type: { from: asset_types }
+    output: output/{source}/alarms/{type}.json
+
+  assets:                               # POST, fanned out, paginated
+    method: POST
+    path: /assets/search
+    payload:
+      assetType: { from: asset_types }
+      pageSize: 100
+    fan_out: product
+    paginate: { style: page_number, at: payload.page, has_more: $.hasNext }
+    output: output/{source}/assets/{assetType}_p{page}.json
+
+  measures:                             # GET chained off `assets`, id in path
+    method: GET
+    path: /assets/{id}/measures
+    bind:
+      id: { from: asset_ids }
+    query: { keys: "temperature,humidity" }
+    limit: 20
+    output: output/{source}/measures/{id}.json

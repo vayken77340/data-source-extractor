@@ -10,12 +10,17 @@ from typing import get_args
 
 import pytest
 
+from api_extractor import providers
 from api_extractor.config.loader import load_source
 from api_extractor.config.models import Auth, Paginate
 from api_extractor.config.validate import validate_source
 from tests.conftest import REPO_ROOT
 
 TEMPLATE = REPO_ROOT / "config" / "TEMPLATE.yaml"
+
+# The template documents `excel_column`, which lives in `providers/`. This is the one
+# coupling to that directory, and it is deliberate: the file being tested references it.
+providers.load_from(REPO_ROOT / "providers")
 
 
 def auth_type_names() -> set[str]:
