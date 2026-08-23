@@ -25,8 +25,17 @@ def test_the_check_count_is_right():
 
 def test_every_command_is_documented():
     commands = {command.name or command.callback.__name__ for command in app.registered_commands}
-    missing = [name for name in commands if f"api_extractor {name}" not in README]
+    missing = [
+        name
+        for name in commands
+        if f"main.py {name}" not in README and f"api_extractor {name}" not in README
+    ]
     assert not missing, f"commands absent from the README: {missing}"
+
+
+def test_the_no_setup_entry_point_is_documented():
+    assert "python main.py" in README
+    assert (REPO_ROOT / "main.py").is_file()
 
 
 def test_every_builtin_provider_is_documented():

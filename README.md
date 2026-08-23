@@ -14,7 +14,7 @@ A source is one YAML file. No code is required to add one.
 
 ## Setup
 
-The package is never installed — the venv is just pointed at `src`.
+Nothing is installed and nothing needs to be set in your shell.
 
 ```bash
 python -m venv .venv
@@ -23,23 +23,43 @@ source .venv/bin/activate                # .venv\Scripts\activate on Windows
 pip install -r requirements.txt          # or requirements-dev.txt to run the tests
 cp .env.example .env                     # then fill in the values
 
-# put src on the venv's path, once, when the venv is created
-python -c "import sysconfig, pathlib; pathlib.Path(sysconfig.get_paths()['purelib'], 'api_extractor.pth').write_text(str(pathlib.Path('src').resolve()))"
-
-python -m api_extractor list-sources
+python main.py list-sources
 ```
 
-That last setup line writes a one-line `.pth` file into the venv's `site-packages` holding
-the absolute path to `src`. Python reads `.pth` files at startup, so `src` is on the path
-for anything run with this venv — no build, no packaging metadata, no editable install, no
-`PYTHONPATH` to remember. **Redo it if you recreate the venv**, since `.venv/` is
-gitignored and the path inside is absolute.
+That's the whole setup. [`main.py`](main.py) puts `src` on the path itself, so there is no
+`PYTHONPATH` to remember, no install step and no packaging metadata.
 
-Run from the repo root: `config/`, `input/` and `output/` all resolve relative to the
-working directory.
+**Everything else comes from `.env`** — credentials *and* proxy settings, read from the
+working directory:
 
-`python -m pytest` works regardless — [`conftest.py`](conftest.py) puts `src` on the path
-itself, so a fresh clone can run the tests before any of the above.
+```
+TB_USER=svc-account
+TB_PASSWORD=...
+HTTPS_PROXY=http://proxy.example.com:8080
+```
+
+Run from the repo root: `.env`, `config/`, `providers/`, `input/` and `output/` all resolve
+relative to the working directory.
+
+`python -m pytest` works on a bare clone before any of the above —
+[`conftest.py`](conftest.py) puts `src` on the path itself.
+
+<details>
+<summary><code>python -m api_extractor</code> instead of <code>python main.py</code></summary>
+
+Both work. `python -m` needs `src` on the path first, which one line per venv arranges:
+
+```bash
+python -c "import sysconfig, pathlib; pathlib.Path(sysconfig.get_paths()['purelib'], 'api_extractor.pth').write_text(str(pathlib.Path('src').resolve()))"
+```
+
+That writes a `.pth` file into the venv's `site-packages` holding the absolute path to
+`src`; Python reads `.pth` files at startup. **Redo it if you recreate the venv** — `.venv/`
+is gitignored and the path inside is absolute. A `.pth` pointing at a directory that does
+not exist is silently ignored, which is why a stale one fails as a bare `No module named
+api_extractor`.
+
+</details>
 
 ### Behind a corporate proxy
 
@@ -62,11 +82,11 @@ fix trust, it removes it — on a network that is already inspecting your traffi
 ## Running
 
 ```bash
-python -m api_extractor list-sources             # what is defined
-python -m api_extractor list-providers           # what is registered, and the args each takes
-python -m api_extractor validate <source>        # every problem in one pass, no network
-python -m api_extractor run <source> --dry-run   # the resolved plan, still no network
-python -m api_extractor run <source>             # issue the requests
+python main.py list-sources             # what is defined
+python main.py list-providers           # what is registered, and the args each takes
+python main.py validate <source>        # every problem in one pass, no network
+python main.py run <source> --dry-run   # the resolved plan, still no network
+python main.py run <source>             # issue the requests
 ```
 
 `run` flags:
@@ -132,9 +152,9 @@ test suite, so if it is there it works.
 Then, in order:
 
 1. Add any new `env:` vars to `.env.example` (empty) and `.env` (filled).
-2. `python -m api_extractor validate <name>` until it is clean.
-3. `python -m api_extractor run <name> --dry-run` and check the request count.
-4. `python -m api_extractor run <name> --limit 2` before running it wide.
+2. `python main.py validate <name>` until it is clean.
+3. `python main.py run <name> --dry-run` and check the request count.
+4. `python main.py run <name> --limit 2` before running it wide.
 
 ### Validation catches these before any request goes out
 
@@ -280,7 +300,7 @@ status, output path, duration, parents, error — including skips. It is the ind
 makes partial re-runs sane.
 
 Because `from_output` reads whatever is already on disk,
-`python -m api_extractor run test --endpoint measures` works against yesterday's
+`python main.py run test --endpoint measures` works against yesterday's
 asset files without re-hitting `/assets/search`.
 
 ## Secrets

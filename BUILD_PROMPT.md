@@ -50,10 +50,16 @@ If a task starts to feel like a workflow engine, stop and flag it rather than bu
 ## 4. Tech constraints
 
 - Python 3.11+, `src/` layout, **no packaging**. There is no `pyproject.toml`, no
-  `setup.py` and no install step. Dependencies come from `requirements.txt`, and `src` is
-  put on the venv's path with a one-line `.pth` file so `python -m api_extractor` works —
-  see README §Setup. `python -m pytest` needs nothing, because the root `conftest.py`
-  handles it.
+  `setup.py` and no install step. Dependencies come from `requirements.txt`.
+- **Nothing has to be set in the shell.** `main.py` at the repo root puts `src` on the path
+  itself, so `python main.py run <source>` works on a bare clone — no `PYTHONPATH`.
+  Credentials *and* proxy settings come from `.env`. `python -m api_extractor` is
+  equivalent once a `.pth` points the venv at `src`, but that is per-venv setup holding an
+  absolute path, and a stale one fails as an unexplained `No module named api_extractor`.
+  `python -m pytest` needs nothing either: the root `conftest.py` handles it.
+- **`.env` is read from the working directory**, like everything else. Bare `load_dotenv()`
+  searches from the *package's* directory instead, which quietly finds this repo's `.env`
+  whichever project you are standing in.
 - Framework dependencies: `httpx`, `truststore`, `pydantic` v2, `pyyaml`, `jsonpath-ng`,
   `typer`, `python-dotenv`, `tenacity`. Dev: `pytest`, `pytest-httpx`.
 - **`truststore` is not optional.** httpx verifies against certifi, which ships public root

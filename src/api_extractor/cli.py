@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from api_extractor.auth.registry import Authenticator
 from api_extractor.config.loader import SOURCES_ROOT, list_sources, load_source, source_path
@@ -27,7 +27,12 @@ app = typer.Typer(add_completion=False, help="Config-driven API sample extractor
 def main(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
 ) -> None:
-    load_dotenv()
+    # From the working directory, like config/, input/, output/ and providers/.
+    # Bare load_dotenv() searches from *this file's* directory instead, which finds the
+    # repo's own .env no matter whose project you are standing in.
+    dotenv = find_dotenv(usecwd=True)
+    if dotenv:
+        load_dotenv(dotenv)
     configure_logging(logging.DEBUG if verbose else logging.INFO)
     providers.load_from()
 
