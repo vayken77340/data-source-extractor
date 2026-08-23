@@ -79,7 +79,23 @@ python -m api_extractor run <source>             # issue the requests
 | `--dry-run` | print the plan and issue nothing |
 | `--force` | rewrite outputs that already exist |
 | `--run-id ID` | reuse a run id instead of minting one |
-| `-v` | debug logging (before the subcommand) |
+| `-v` | trace every request and response (before the subcommand) |
+
+**`-v` when a source misbehaves.** It prints what actually went out and what came back —
+the body you sent is usually the thing you got wrong:
+
+```
+DEBUG api_extractor.runner -> POST https://api.example.com/v1/things/search
+     query   -
+     payload {"status": "ACTIVE", "pageSize": 100}
+     headers {'Accept': 'application/json', 'X-Authorization': '***REDACTED***'}
+DEBUG api_extractor.runner <- 200 in 143ms
+     headers {'content-type': 'application/json'}
+     body    {"data":[1,2]}
+```
+
+Credentials are redacted before the log record is built, not filtered on the way out, so
+`-v` is safe to paste into a ticket. Response bodies are truncated at 500 characters.
 
 **Always dry-run first.** It runs the exact same planning code, then stops:
 

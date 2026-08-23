@@ -8,7 +8,9 @@ Phase 4 issues one request per spec. The pagination walk arrives in phase 5.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import json
+import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -280,6 +282,43 @@ def _one(
     return ("written" if response.status < 400 else "failed", response.body)
 
 
+def _dispatch(client: Client, request: Request, auth_headers: Iterable[str]) -> Response:
+    """Send one request, tracing it at DEBUG.
+
+    Headers are redacted here rather than left to the log scrubber, so a credential cannot
+    reach a log record in the first place — the scrubber is the second line of defence, not
+    the only one.
+    """
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(
+            "-> %s %s\n     query   %s\n     payload %s\n     headers %s",
+            request.method,
+            request.url,
+            dict(request.query) or "-",
+            json.dumps(request.payload, ensure_ascii=False) if request.payload else "-",
+            envelope.redact_headers(request.headers, auth_headers),
+        )
+
+    response = client.send(request)
+
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(
+            "<- %s in %sms\n     headers %s\n     body    %s",
+            response.status,
+            response.elapsed_ms,
+            dict(response.headers),
+            _preview(response.text),
+        )
+    return response
+
+
+def _preview(text: str, limit: int = 500) -> str:
+    body = text.strip().replace("\n", " ")
+    if not body:
+        return "-"
+    return body if len(body) <= limit else f"{body[:limit]}... ({len(text)} chars)"
+
+
 def _send(
     source: Source,
     spec: RequestSpec,
@@ -293,11 +332,12 @@ def _send(
     A chained fan-out can run for an hour and outlive its token; this will happen. Returns
     the request that was actually sent, so the envelope records what went out.
     """
+    names = authenticator.header_names()
     request = build_request(source, spec, authenticator.headers())
     if paginate is not None:
         request = pagination.with_cursor(request, paginate, cursor)
 
-    response = client.send(request)
+    response = _dispatch(client, request, names)
     if response.status != 401:
         return response, request
 
@@ -305,4 +345,4 @@ def _send(
     retried = build_request(source, spec, authenticator.refresh())
     if paginate is not None:
         retried = pagination.with_cursor(retried, paginate, cursor)
-    return client.send(retried), retried
+    return _dispatch(client, retried, authenticator.header_names()), retried

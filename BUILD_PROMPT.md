@@ -482,6 +482,11 @@ provider name was misspelled is the exact outcome this prevents.
 ### Logging
 
 - Structured, one line per request: endpoint, params, status, duration, path.
+- `-v` traces each request and response at DEBUG: method, URL, query, payload, headers,
+  then status, response headers and a 500-character body preview. This is for debugging a
+  new source, where the payload you sent is usually the thing you got wrong. Headers are
+  redacted **at the call site**, so a credential never reaches a log record — the scrubbing
+  formatter below is the second line of defence, not the only one.
 - **Scrub secrets in the logging formatter**, not at call sites. An unhandled `httpx`
   exception will otherwise print the full request including headers.
 - The scrubber has a public `register_secret(value, *, name=None)`, not just

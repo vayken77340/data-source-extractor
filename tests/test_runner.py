@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from api_extractor.auth.registry import Authenticator
 from api_extractor.config.models import Source
 from api_extractor.http.client import Client
+from api_extractor.logs import REDACTED
 from api_extractor.persist import envelope, manifest
 from api_extractor.providers import registry
 from api_extractor.runner import execute
@@ -357,6 +359,51 @@ def test_each_page_is_its_own_manifest_line(httpx_mock, client, tmp_path, monkey
         True,
         True,
     ]
+
+
+def test_verbose_traces_the_request_without_leaking_the_credential(
+    httpx_mock, client, tmp_path, monkeypatch, caplog
+):
+    """-v is for debugging a new source: you need the body you actually sent."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("K", "sk-live-9f3c8a21b4")
+    source = source_with(
+        {
+            "search": {
+                "method": "POST",
+                "path": "/things/search",
+                "payload": {"status": "ACTIVE"},
+                "output": "{source}/search.json",
+            }
+        },
+        auth={
+            "type": "header",
+            "headers": {"X-Authorization": {"value": "env:K", "template": "Api-Key {value}"}},
+        },
+    )
+    httpx_mock.add_response(json={"data": [1, 2]})
+
+    with caplog.at_level(logging.DEBUG, logger="api_extractor.runner"):
+        run(source, client, tmp_path)
+
+    assert "-> POST https://demo.example.com/things/search" in caplog.text
+    assert '"status": "ACTIVE"' in caplog.text
+    assert "<- 200" in caplog.text
+    assert '{"data":[1,2]}' in caplog.text
+
+    # Redacted at the call site, so the secret never reaches a log record at all —
+    # the scrubbing formatter is the second line of defence, not the only one.
+    assert "sk-live-9f3c8a21b4" not in caplog.text
+    assert REDACTED in caplog.text
+
+
+def test_a_long_body_is_truncated_in_the_trace(httpx_mock, client, tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    httpx_mock.add_response(json={"padding": "x" * 5000})
+    with caplog.at_level(logging.DEBUG, logger="api_extractor.runner"):
+        run(source_with(PING), client, tmp_path)
+    assert "chars)" in caplog.text
+    assert len(caplog.text) < 3000
 
 
 def test_the_manifest_indexes_every_attempt(httpx_mock, client, tmp_path, monkeypatch, fake):
