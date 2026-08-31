@@ -105,3 +105,72 @@ example of everything above: several columns kept row-wise, blanks dropped, erro
 loudly, and no import from anywhere inside `src/`.
 
 `list-providers` shows both kinds with their arguments.
+
+## Parameter files
+
+Reading the business spreadsheet at run time works, but it puts the messiest input you have
+inside the hot path. `tools/build_params.py` moves it to a boundary you control: it turns a
+sheet into a **parameter file**, which is provenance plus rows.
+
+```
+python tools/build_params.py input/asset_types.xlsx \
+    --sheet Referentiel --columns assetType,measureType --ffill assetType \
+    -o config/params/asset_types.json
+```
+
+```json
+{ "schema": "param-file/1", "source_file": "input/asset_types.xlsx",
+  "sheet": "Referentiel", "generated_at": "2026-08-31T09:12:04Z",
+  "columns": ["assetType", "measureType"],
+  "rows": [{"assetType": "PUMP", "measureType": "temperature"}] }
+```
+
+`--ffill` is the merged-cell declaration, and it is the one thing that cannot be guessed:
+openpyxl returns `None` for every cell of a merged range but the top-left, so without it a
+merged type silently drops every row after its first. That failure produces a run that
+looks healthy and makes half the requests it should — which is the whole reason this step
+exists rather than a flag on a provider.
+
+The container is fixed; what is inside a row is whatever that sheet has. So one provider,
+`param_file`, reads every parameter file you will ever generate, and a new spreadsheet
+means a new invocation of the build script rather than new code. It reads JSON or YAML —
+a second *encoding* for small hand-maintained tables, never a second structure.
+
+Two rules keep this from rotting:
+
+- **The build script does not live here.** Everything in this directory is imported at
+  startup; a build script would run during `validate` and `list-providers`.
+- **`param_file` gets no selector argument.** A JSONPath into your own file would make YAML
+  `args` a query language, which rule 4 rules out. `from_output` takes one because it reads
+  the *API's* JSON, whose shape is not yours. A structure you author yourself does not need
+  one — and if something genuinely is not row-shaped, write a second provider.
+
+## Joining a parameter file against fetched output
+
+`measure_keys_for_assets` is the worked example of a correlated join. Measure types are a
+fact about an asset's *type*, so asking a valve for its temperature is wrong — and the API
+answers it with an empty 200, so the mistake costs a round trip and looks like data.
+
+`fan_out` cannot express this: `product` crosses every asset against every measure type,
+and `zip` pairs them positionally. The join has to happen in Python, and the key it joins
+on survives the round trip in the envelope's `metadata.params`, which records the params
+each request was planned with.
+
+```yaml
+providers:
+  asset_measures:
+    fn: measure_keys_for_assets
+    args: { path: config/params/asset_types.json, endpoint: assets }
+
+endpoints:
+  measures:
+    method: GET
+    path: /assets/{id}/measures
+    bind:  { id:   { from: asset_measures } }
+    query: { keys: { from: asset_measures } }   # "temperature,humidity" for a pump
+```
+
+Both markers name the same provider, so `id` and `keys` are filled from one row and are
+never re-combined. One row per asset rather than one per (asset, measure) pair is
+deliberate: pair rows would collide in `output/…/measures/{id}.json`, and `limit` would
+then cap pairs instead of assets.

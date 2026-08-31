@@ -254,6 +254,21 @@ Reading a spreadsheet is a fact about a particular business, so `excel_column` l
 
 `list-providers` prints everything registered, with its args.
 
+### Parameter files
+
+`tools/build_params.py` turns a business spreadsheet into a **parameter file** — provenance
+plus rows — so the messiest input you have is handled once, at a boundary you control,
+rather than on every planning pass. `--ffill` declares which columns are merged; without
+it a merged cell silently drops every row after its first, and the run still looks healthy.
+
+The container is fixed and the columns are not, so one provider (`param_file`) reads every
+parameter file you generate, whatever is in it. `providers/README.md` has the details.
+
+`measure_keys_for_assets` is the worked example of the other half: a correlated join, where
+one endpoint's values only make sense against another's. `fan_out` cannot express that —
+`product` would ask a valve for its temperature — so the join happens in Python, keyed on
+the `metadata.params` recorded in each envelope.
+
 ## What lands on disk
 
 One file per response, one file per page — pages are never merged into one array, because

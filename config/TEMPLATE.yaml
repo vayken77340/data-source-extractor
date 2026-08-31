@@ -99,6 +99,19 @@ providers:
       endpoint: assets         # naming an endpoint here is what creates the dependency
       path: "$.data[*].id.id"  # quoted — see the YAML trap at the top
 
+  asset_type_rows:             # columns off a parameter file, whatever its columns are
+    fn: param_file             # blanks dropped, deduped, order preserved
+    args:
+      path: config/params/asset_types.json
+      columns: [assetType]     # several columns stay row-wise together
+
+  asset_measures:              # a join done in Python — see `typed_measures` below
+    fn: measure_keys_for_assets
+    args:
+      path: config/params/asset_types.json
+      endpoint: typed_assets   # naming an endpoint here is what creates the dependency
+      # type_column, measure_column, id_path and separator all have defaults
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 # `{from: provider}` is the only special marker. Everything else in query,
 # payload and bind is a literal, at any nesting depth.
@@ -161,6 +174,42 @@ endpoints:
     query: { keys: "temperature,humidity" }
     limit: 20                  # overrides defaults.limit for this endpoint
     output: output/{source}/measures/{id}.json
+
+  # ── A two-hop chain whose second hop depends on the first ──────────────────
+  # The pattern for "these two params only make sense together". A spreadsheet
+  # lists which measure types exist for which asset type; the measure types are
+  # a fact about the asset's type, not about the asset.
+  #
+  # Hop 1 fans out over the asset types and fetches their assets. Hop 2 asks
+  # each asset only for the measures its own type actually has.
+  #
+  # This cannot be written with fan_out. Crossing asset ids against measure
+  # types would ask a valve for its temperature — a request the API answers with
+  # an empty 200, so it costs a round trip and looks exactly like real data.
+  # The correlation is a business rule, so `measure_keys_for_assets` does it in
+  # Python: it reads the assets already on disk, recovers each one's assetType
+  # from the envelope's metadata.params, and emits `id` and `keys` on one row.
+  #
+  # Two markers naming the same provider are filled from that single row, never
+  # re-combined — the same rule that keeps `region` and `tier` together above.
+
+  typed_assets:
+    method: POST
+    path: /assets/search
+    payload:
+      assetType: { from: asset_type_rows }
+      pageSize: 100
+    output: output/{source}/typed_assets/{assetType}.json
+
+  typed_measures:
+    method: GET
+    path: /assets/{id}/measures
+    bind:
+      id: { from: asset_measures }
+    query:
+      keys: { from: asset_measures }   # "temperature,humidity" for a pump
+    limit: 20
+    output: output/{source}/typed_measures/{id}.json
 
   # `zip` pairs separate providers positionally instead of crossing them.
   # Unequal lengths raise rather than truncating silently.

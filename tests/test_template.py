@@ -84,9 +84,19 @@ def test_template_shows_the_limit_cascade(template_env):
 
 
 def test_template_shows_every_builtin_provider(template_env):
+    """Derived from BUILTINS, so shipping a new built-in forces documenting it."""
     source = load_source(TEMPLATE)
-    assert {decl.fn for decl in source.providers.values()} == {
-        "literal",
-        "excel_column",
-        "from_output",
-    }
+    shown = {decl.fn for decl in source.providers.values()}
+    missing = set(providers.BUILTINS) - shown
+    assert not missing, f"built-in providers absent from the template: {sorted(missing)}"
+
+
+def test_template_shows_the_local_providers(template_env):
+    """The template documents `providers/` too, and drifts from it silently otherwise.
+
+    Pinned rather than derived from the registry: registration is process-global, so
+    another test module's provider would leak into a derived set.
+    """
+    source = load_source(TEMPLATE)
+    shown = {decl.fn for decl in source.providers.values()} - set(providers.BUILTINS)
+    assert shown == {"excel_column", "param_file", "measure_keys_for_assets"}
