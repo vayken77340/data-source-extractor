@@ -61,7 +61,7 @@ def merged_sheet(tmp_path) -> Path:
 
 def extract(path: Path, columns: list[str], ffill: list[str], sheet: str = "Referentiel"):
     rows = build_params.read_sheet(path, sheet)
-    return build_params.extract(rows, columns, frozenset(ffill))
+    return build_params.extract(rows, build_params.parse_columns(columns), frozenset(ffill))
 
 
 def test_forward_fill_carries_a_merged_cell_down(merged_sheet):
@@ -112,6 +112,96 @@ def test_blanks_are_dropped_and_duplicates_collapse(tmp_path):
 def test_missing_column_names_the_headers(merged_sheet):
     with pytest.raises(SystemExit, match="headers: assetType, measureType"):
         extract(merged_sheet, ["assetTypes"], [])
+
+
+# ── Renaming ───────────────────────────────────────────────────────────────────────────
+# The sheet's vocabulary is the business's; the parameter file's is yours. Renaming here
+# means no marker, bind key or output template downstream ever sees the sheet's spelling.
+
+
+@pytest.fixture
+def business_sheet(tmp_path) -> Path:
+    """Headers as the business writes them: spaces, accents, capitals, a merged type."""
+    return make_xlsx(
+        tmp_path / "referentiel.xlsx",
+        "Referentiel",
+        [
+            ["Type d'actif", "Grandeur mesuree", "Commentaire"],
+            ["PUMP", "temperature", "ignore me"],
+            [None, "humidity", None],
+            ["VALVE", "pressure", None],
+        ],
+        merges=["A2:A3"],
+    )
+
+
+def test_a_column_is_renamed_on_the_way_out(business_sheet):
+    rows = extract(
+        business_sheet,
+        ["Type d'actif=assetType", "Grandeur mesuree=measureType"],
+        ["assetType"],
+    )
+    assert rows == [
+        {"assetType": "PUMP", "measureType": "temperature"},
+        {"assetType": "PUMP", "measureType": "humidity"},
+        {"assetType": "VALVE", "measureType": "pressure"},
+    ]
+
+
+def test_ffill_names_the_output_column_not_the_sheets(business_sheet):
+    """Past the header row everything is in your vocabulary, so `--ffill` is too."""
+    with pytest.raises(SystemExit, match=r"--ffill names .+ not in --columns \['assetType'\]"):
+        build_params.main(
+            [
+                str(business_sheet),
+                "-o",
+                str(business_sheet.parent / "out.json"),
+                "--sheet",
+                "Referentiel",
+                "--columns",
+                "Type d'actif=assetType",
+                "--ffill",
+                "Type d'actif",
+            ]
+        )
+
+
+def test_a_bare_column_is_not_renamed(merged_sheet):
+    assert extract(merged_sheet, ["assetType=assetType", "measureType"], ["assetType"]) == extract(
+        merged_sheet, ["assetType", "measureType"], ["assetType"]
+    )
+
+
+def test_two_columns_may_not_map_to_one_name():
+    with pytest.raises(SystemExit, match="maps two sheet columns to 'assetType'"):
+        build_params.parse_columns(["Type=assetType", "Kind=assetType"])
+
+
+def test_the_same_sheet_column_may_not_be_named_twice():
+    with pytest.raises(SystemExit, match="names the sheet column 'Type' twice"):
+        build_params.parse_columns(["Type=assetType", "Type=kind"])
+
+
+def test_the_flag_may_be_repeated_instead_of_comma_joined(business_sheet, tmp_path):
+    out = tmp_path / "out.json"
+    build_params.main(
+        [
+            str(business_sheet),
+            "-o",
+            str(out),
+            "--sheet",
+            "Referentiel",
+            "--columns",
+            "Type d'actif=assetType",
+            "--columns",
+            "Grandeur mesuree=measureType",
+            "--ffill",
+            "assetType",
+        ]
+    )
+    document = json.loads(out.read_text(encoding="utf-8"))
+    assert document["columns"] == ["assetType", "measureType"]
+    assert document["rows"][1] == {"assetType": "PUMP", "measureType": "humidity"}
 
 
 def test_missing_sheet_names_the_ones_present(merged_sheet):

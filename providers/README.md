@@ -131,6 +131,24 @@ merged type silently drops every row after its first. That failure produces a ru
 looks healthy and makes half the requests it should — which is the whole reason this step
 exists rather than a flag on a provider.
 
+Real sheets are not written in your vocabulary, so `header=name` renames a column on the
+way out:
+
+```
+--columns "Type d'actif=assetType,Grandeur mesuree=measureType" --ffill assetType
+```
+
+Renaming here rather than downstream is the point of having a boundary at all. The sheet's
+spelling belongs to the business and changes when they feel like it; `assetType` belongs to
+you and is what markers, `bind` keys and output templates are written against. Past this
+script, nothing knows the column was ever called anything else — so a header gaining an
+accent is a one-word change here instead of a rename across every source file.
+
+It is deliberately explicit rather than inferred. Camel-casing a header is a guess, and a
+guess that silently stops matching is exactly the failure mode this whole step exists to
+remove. `--ffill` names the *output* columns, since everything past the header row is
+already in your vocabulary.
+
 The container is fixed; what is inside a row is whatever that sheet has. So one provider,
 `param_file`, reads every parameter file you will ever generate, and a new spreadsheet
 means a new invocation of the build script rather than new code. It reads JSON or YAML —

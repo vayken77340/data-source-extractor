@@ -1,0 +1,32 @@
+{
+  "schema": "param-file/1",
+  "source_file": "input/asset_types.xlsx",
+  "sheet": "Referentiel",
+  "generated_at": "2026-08-31T14:11:26Z",
+  "columns": [
+    "assetType"
+  ],
+  "rows": [
+    {
+      "assetType": "PUMP"
+    },
+    {
+      "assetType": "VALVE"
+    },
+    {
+      "assetType": "TANK"
+    },
+    {
+      "assetType": "COMPRESSOR"
+    },
+    {
+      "assetType": "SENSOR"
+    },
+    {
+      "assetType": "METER"
+    },
+    {
+      "assetType": "BOILER"
+    }
+  ]
+}
