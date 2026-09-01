@@ -36,6 +36,7 @@ def from_output_joined(
     file: str,
     join_on: str,
     select: str,
+    fields: dict[str, str] | None = None,
     separator: str = ",",
 ) -> list[dict[str, Any]]:
     """`from_output`, plus what a parameter file associates with each value's origin.
@@ -46,23 +47,31 @@ def from_output_joined(
     column in the file *and* the param recorded on the envelope, which is the join key;
     `select` is the column whose values are attached, joined with `separator`.
 
-    Rows carry two fields — the extracted value, named after the last identifier in `path`
-    the way `from_output` names its own, and the selected column under its own name. Two
-    markers naming this provider are therefore filled from one row and stay correlated.
+    `path` selects nodes; `fields` says how to turn each node into a row. Left out, the node
+    *is* the value and is named after the last identifier in `path`, the way `from_output`
+    names its own. Given, it maps a field name to a JSONPath *relative to that node*, so
+    several values off one record stay together:
 
-    A value that surfaced under two different keys keeps the first and records both
-    parents, matching what `from_output` does with a value seen twice.
+        path: "$.data[*]"
+        fields: { id: "$.id.id", assetName: "$.latest.ENTITY_FIELD.name.value" }
+
+    Two independent paths over the whole body would be the obvious shortcut and it is wrong
+    for the same reason two providers are: one record missing a name shifts every later
+    pairing, silently. A record missing any requested field is dropped instead.
+
+    Every row also carries the join key under `join_on`'s own name, since that value is what
+    the whole join turned on and is usually worth putting in an output path.
+
+    A value that surfaced under two different keys keeps the first and records both parents,
+    matching what `from_output` does with a value seen twice.
     """
-    value_field = field_name(path)
-    if value_field == select:
-        raise ValueError(
-            f"from_output_joined: `path` is named after {value_field!r} and `select` is "
-            f"{select!r} — one row cannot carry two fields of the same name"
-        )
+    selectors = {name: parse_jsonpath(sub) for name, sub in (fields or {}).items()}
+    names = list(selectors) if selectors else [field_name(path)]
+    check_names(names, join_on, select)
 
     lookup = group(Path(file), join_on, select)
     expression = parse_jsonpath(path)
-    rows: dict[str, dict[str, Any]] = {}
+    rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for saved in ctx.outputs_for(endpoint):
         metadata = saved.envelope.get("metadata") or {}
         key = (metadata.get("params") or {}).get(join_on)
@@ -70,12 +79,15 @@ def from_output_joined(
         if not selected:
             continue  # nothing associated with this key: no request worth making
         for match in expression.find(saved.body):
-            if match.value is None:
+            extracted = extract(match.value, selectors, names)
+            if extracted is None:
                 continue
+            identity = tuple(extracted[name] for name in names)
             row = rows.setdefault(
-                str(match.value),
+                identity,
                 {
-                    value_field: match.value,
+                    **extracted,
+                    join_on: key,
                     select: separator.join(str(item) for item in selected),
                     PARENTS: [],
                 },
@@ -84,6 +96,36 @@ def from_output_joined(
             if parent not in row[PARENTS]:
                 row[PARENTS].append(parent)
     return list(rows.values())
+
+
+def extract(node: Any, selectors: dict[str, Any], names: list[str]) -> dict[str, Any] | None:
+    """One record's fields, or None when any of them is missing.
+
+    A partial row is worse than no row: it breaks the correlation the whole provider exists
+    to keep, and a blank parameter is not worth a request.
+    """
+    if not selectors:
+        return None if node is None else {names[0]: node}
+
+    out: dict[str, Any] = {}
+    for name, selector in selectors.items():
+        found = selector.find(node)
+        value = found[0].value if found else None
+        if value is None:
+            return None
+        out[name] = value
+    return out
+
+
+def check_names(names: list[str], join_on: str, select: str) -> None:
+    """Every field lands on one row, so two of a name would silently lose one."""
+    everything = [*names, join_on, select]
+    clashing = sorted({name for name in everything if everything.count(name) > 1})
+    if clashing:
+        raise ValueError(
+            f"from_output_joined: {clashing} would appear twice on one row — `fields` "
+            f"(or the name derived from `path`), `join_on` and `select` must all differ"
+        )
 
 
 def field_name(json_path: str) -> str:

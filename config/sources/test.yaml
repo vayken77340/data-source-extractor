@@ -29,9 +29,15 @@ providers:
     fn: from_output_joined
     args:
       endpoint: assets
-      path: "$.data[*].id.id"
+      # `path` picks the records; `fields` pulls several values off each one, so the id and
+      # the name stay on the same row. Two paths over the whole body would drift apart the
+      # first time a record had no name.
+      path: "$.data[*]"
+      fields:
+        id: "$.id.id"
+        assetName: "$.latest.ENTITY_FIELD.name.value"
       file: config/params/asset_types.json
-      join_on: assetType
+      join_on: assetType     # also carried onto every row, under this name
       select: measureType
 
 endpoints:
@@ -66,9 +72,14 @@ endpoints:
     method: GET
     path: /assets/{id}/measures
     bind:
-      id: { from: asset_measures }      # named after the last identifier in `path`
+      id: { from: asset_measures }      # `fields.id`
     query:
       # `as` because the row's field is named after `select`, not after this key.
       keys: { from: asset_measures, as: measureType }   # "temperature,humidity"
+    label:
+      # Resolved like any other marker but never sent — these only shape the path below,
+      # and are recorded in the envelope's metadata.params.
+      assetType: { from: asset_measures }
+      assetName: { from: asset_measures }
     limit: 20
-    output: output/{source}/measures/{id}.json
+    output: output/{source}/measures/{assetType}/{assetName}.json

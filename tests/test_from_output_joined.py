@@ -52,7 +52,8 @@ def envelope_path(name: str) -> Path:
 
 
 def saved_output(name: str, params: dict, body: dict) -> SavedOutput:
-    return SavedOutput(path=envelope_path(name), envelope={"metadata": {"params": params}, "body": body})
+    envelope = {"metadata": {"params": params}, "body": body}
+    return SavedOutput(path=envelope_path(name), envelope=envelope)
 
 
 def assets(name: str, asset_type: str, ids: list[str]) -> SavedOutput:
@@ -98,7 +99,7 @@ def test_the_value_field_is_named_after_the_json_path(params, from_output_joined
     """The same rule `from_output` uses, so `bind: {id: ...}` lines up by name."""
     ctx = context(assets("pump", "PUMP", ["a1"]))
     (row,) = from_output_joined(ctx, endpoint="assets", file=str(params), **ASSET_ARGS)
-    assert set(row) == {"id", "measureType", "__parents__"}
+    assert set(row) == {"id", "assetType", "measureType", "__parents__"}
 
 
 def test_records_the_envelope_each_value_came_from(params, from_output_joined):
@@ -154,7 +155,7 @@ def test_a_path_and_select_that_collide_are_refused(tmp_path, from_output_joined
     """Both land on one row, so two fields of one name would silently lose one."""
     params = write_params(tmp_path / "p.json", ["region", "tier"], [{"region": "EU", "tier": "a"}])
     ctx = context(saved_output("x", {"region": "EU"}, {"data": [{"tier": "z"}]}))
-    with pytest.raises(ValueError, match="cannot carry two fields of the same name"):
+    with pytest.raises(ValueError, match=r"\['tier'\] would appear twice on one row"):
         from_output_joined(
             ctx, endpoint="things", file=str(params), path="$.data[*].tier", join_on="region",
             select="tier",

@@ -105,6 +105,10 @@ def render_output(
 ) -> str:
     # Intrinsics last: `output/{source}/...` must always be the source name, or the tree
     # shape depends on whether some API happens to have a parameter called `source`.
+    #
+    # Values go in verbatim. A `/` in a name will create a directory and a `:` will fail on
+    # Windows — but which field is safe to build a path from is a choice about your data,
+    # not something to be guessed at here. `{slug}` is available when you want it flattened.
     values = {
         **params,
         "source": source,

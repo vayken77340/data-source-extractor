@@ -158,7 +158,7 @@ Then, in order:
 
 ### Validation catches these before any request goes out
 
-`validate` runs 13 checks and reports **all** failures at once — failing on request 400
+`validate` runs 14 checks and reports **all** failures at once — failing on request 400
 of 900 because a provider name was misspelled is the exact outcome it exists to prevent.
 `--show-checks` lists what ran.
 
@@ -166,8 +166,8 @@ Unknown YAML keys, undeclared providers, unregistered provider functions, provid
 that do not fit their function, chains pointing at endpoints that do not exist, dependency
 cycles (with the cycle path), unset env vars, `path` placeholders without a matching
 `bind` entry and vice versa, unresolvable `output` placeholders, two markers colliding on
-one param name, the page cursor landing on top of a marker, and a paginated endpoint whose
-output path has no `{page}` in it.
+one param name, the page cursor landing on top of a marker, a `label` that appears in no
+`output` placeholder, and a paginated endpoint whose output path has no `{page}` in it.
 
 ### Things worth knowing
 

@@ -109,9 +109,17 @@ providers:
     fn: from_output_joined
     args:
       endpoint: typed_assets   # naming an endpoint here is what creates the dependency
-      path: "$.data[*].id.id"  # quoted — see the YAML trap at the top
+      path: "$.data[*]"        # quoted — see the YAML trap at the top
+      # `path` selects nodes; `fields` says how to turn each node into a row, with each
+      # JSONPath relative to that node. Omit `fields` and the node *is* the value, named
+      # after the last identifier in `path`. Several values off one record stay together —
+      # two paths over the whole body would drift apart the first time one was missing.
+      fields:
+        id: "$.id.id"
+        assetName: "$.latest.ENTITY_FIELD.name.value"
       file: config/params/asset_types.json
-      join_on: assetType       # a column in the file *and* the param on the envelope
+      join_on: assetType       # a column in the file *and* the param on the envelope;
+                               # also carried onto every row under this name
       select: measureType      # the column whose values are attached, joined by `separator`
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -211,12 +219,26 @@ endpoints:
     method: GET
     path: /assets/{id}/measures
     bind:
-      id: { from: asset_measures }     # named after the last identifier in `path`
+      id: { from: asset_measures }     # `fields.id`
     query:
       # `as` because the row's field is named after `select`, not after this key.
       keys: { from: asset_measures, as: measureType }   # "temperature,humidity"
+    # `label` resolves markers exactly like `bind` and `query`, but nothing ever renders
+    # them into the request. They exist to shape the output path, and they end up in the
+    # envelope's metadata.params, so the tree and the provenance agree.
+    #
+    # `as` is rejected here for the same reason as in `bind`: the key is already the param
+    # name. A label that appears in no `output` placeholder is a validation error — it
+    # would look meaningful and do nothing.
+    #
+    # Values go in verbatim. A name containing `/` will create a directory and a `:` will
+    # fail on Windows, so pick a field that is safe to build a path from — or use {slug},
+    # which flattens every param into one sanitised segment.
+    label:
+      assetType: { from: asset_measures }
+      assetName: { from: asset_measures }
     limit: 20
-    output: output/{source}/typed_measures/{id}.json
+    output: output/{source}/typed_measures/{assetType}/{assetName}.json
 
   # `zip` pairs separate providers positionally instead of crossing them.
   # Unequal lengths raise rather than truncating silently.

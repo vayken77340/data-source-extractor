@@ -65,6 +65,7 @@ EXPECTED_CHECK_IDS = frozenset(
         "config.providers.args_match",
         "config.providers.depends_on_targets",
         "config.dag.acyclic",
+        "config.label.shapes_output",
         "config.markers.malformed",
         "config.params.no_collision",
         "config.path.bind_match",
@@ -257,6 +258,30 @@ def _path_bind_match(source: Source) -> list[Finding]:
     return findings
 
 
+@check("config.label.shapes_output")
+def _label_shapes_output(source: Source) -> list[Finding]:
+    """A label is never sent, so one absent from `output` does nothing at all.
+
+    Everything else in an endpoint has a visible effect if you get it wrong. A label that
+    shapes no path is the one piece of config that can look meaningful and do nothing, so
+    it is an error rather than something to notice months later.
+    """
+    findings: list[Finding] = []
+    for name, endpoint in source.endpoints.items():
+        template = source.output_template(name)
+        used = set(placeholders(template))
+        for key in endpoint.label:
+            if key not in used:
+                findings.append(
+                    (
+                        f"endpoints.{name}.label.{key}",
+                        f"does not appear in `output` ({template!r}) — a label is never "
+                        f"sent, so one that shapes no path has no effect",
+                    )
+                )
+    return findings
+
+
 @check("config.output.template_resolvable")
 def _output_template_resolvable(source: Source) -> list[Finding]:
     findings: list[Finding] = []
@@ -287,14 +312,15 @@ def _reserved_namespace(source: Source) -> list[Finding]:
                         f"belongs to runner-injected provenance",
                     )
                 )
-        for key in endpoint.bind:
-            if is_reserved(key):
-                findings.append(
-                    (
-                        f"endpoints.{name}.bind.{key}",
-                        "bind key is in the reserved __name__ namespace",
+        for block, keys in (("bind", endpoint.bind), ("label", endpoint.label)):
+            for key in keys:
+                if is_reserved(key):
+                    findings.append(
+                        (
+                            f"endpoints.{name}.{block}.{key}",
+                            f"{block} key is in the reserved __name__ namespace",
+                        )
                     )
-                )
         for key in placeholders(source.output_template(name)):
             if is_reserved(key):
                 findings.append(

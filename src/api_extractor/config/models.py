@@ -160,6 +160,7 @@ class Endpoint(_Base):
     query: dict[str, Any] = Field(default_factory=dict)
     payload: Any = None
     bind: dict[str, FromMarker] = Field(default_factory=dict)
+    label: dict[str, FromMarker] = Field(default_factory=dict)
     fan_out: Literal["product", "zip"] = "product"
     paginate: Paginate | None = None
     limit: int | None = None
@@ -175,11 +176,22 @@ class Endpoint(_Base):
                     f"bind.{key}: `as` is not allowed in bind — the key already names the "
                     f"parameter and must match the {{{key}}} placeholder in `path`"
                 )
+        for key, marker in self.label.items():
+            if marker.alias is not None:
+                raise ValueError(
+                    f"label.{key}: `as` is not allowed in label — the key already names the "
+                    f"parameter and must match the {{{key}}} placeholder in `output`"
+                )
         return self
 
     def markers(self) -> list[MarkerRef]:
-        """Every `{from:}` marker in this endpoint, wherever it sits."""
+        """Every `{from:}` marker in this endpoint, wherever it sits.
+
+        `label` markers resolve like any other, but nothing ever renders them into the
+        request — they exist to shape the output path and to be recorded as provenance.
+        """
         refs = [MarkerRef(marker, f"bind.{key}", key) for key, marker in self.bind.items()]
+        refs.extend(MarkerRef(marker, f"label.{key}", key) for key, marker in self.label.items())
         refs.extend(_iter_markers(self.query, "query", None))
         refs.extend(_iter_markers(self.payload, "payload", None))
         return refs

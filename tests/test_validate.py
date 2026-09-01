@@ -66,6 +66,8 @@ BROKEN = {
         # g and h chain off each other: dag.acyclic
         "g": {"method": "GET", "path": "/g", "query": {"v": {"from": "loop_b"}}},
         "h": {"method": "GET", "path": "/h", "query": {"v": {"from": "loop_a"}}},
+        # a label absent from `output`, so it shapes nothing: label.shapes_output
+        "i": {"method": "GET", "path": "/i", "label": {"region": {"from": "types"}}},
     },
 }
 
