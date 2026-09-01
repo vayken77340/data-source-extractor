@@ -264,10 +264,11 @@ it a merged cell silently drops every row after its first, and the run still loo
 The container is fixed and the columns are not, so one provider (`param_file`) reads every
 parameter file you generate, whatever is in it. `providers/README.md` has the details.
 
-`measure_keys_for_assets` is the worked example of the other half: a correlated join, where
-one endpoint's values only make sense against another's. `fan_out` cannot express that —
-`product` would ask a valve for its temperature — so the join happens in Python, keyed on
-the `metadata.params` recorded in each envelope.
+`from_output_joined` covers the other half: a correlated join, where what one endpoint needs
+depends on which request produced the last one. `fan_out` cannot express that — `product`
+would ask a valve for its temperature — so the join happens in Python, keyed on the
+`metadata.params` recorded in each envelope. It is `from_output` that keeps the provenance
+instead of discarding it, and it knows nothing about any particular domain.
 
 ## What lands on disk
 

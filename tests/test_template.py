@@ -99,4 +99,4 @@ def test_template_shows_the_local_providers(template_env):
     """
     source = load_source(TEMPLATE)
     shown = {decl.fn for decl in source.providers.values()} - set(providers.BUILTINS)
-    assert shown == {"excel_column", "param_file", "measure_keys_for_assets"}
+    assert shown == {"excel_column", "param_file", "from_output_joined"}

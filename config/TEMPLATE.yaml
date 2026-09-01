@@ -105,12 +105,14 @@ providers:
       path: config/params/asset_types.json
       columns: [assetType]     # several columns stay row-wise together
 
-  asset_measures:              # a join done in Python — see `typed_measures` below
-    fn: measure_keys_for_assets
+  asset_measures:              # saved output joined to a lookup — see `typed_measures`
+    fn: from_output_joined
     args:
-      path: config/params/asset_types.json
       endpoint: typed_assets   # naming an endpoint here is what creates the dependency
-      # type_column, measure_column, id_path and separator all have defaults
+      path: "$.data[*].id.id"  # quoted — see the YAML trap at the top
+      file: config/params/asset_types.json
+      join_on: assetType       # a column in the file *and* the param on the envelope
+      select: measureType      # the column whose values are attached, joined by `separator`
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 # `{from: provider}` is the only special marker. Everything else in query,
@@ -186,12 +188,16 @@ endpoints:
   # This cannot be written with fan_out. Crossing asset ids against measure
   # types would ask a valve for its temperature — a request the API answers with
   # an empty 200, so it costs a round trip and looks exactly like real data.
-  # The correlation is a business rule, so `measure_keys_for_assets` does it in
-  # Python: it reads the assets already on disk, recovers each one's assetType
-  # from the envelope's metadata.params, and emits `id` and `keys` on one row.
   #
-  # Two markers naming the same provider are filled from that single row, never
-  # re-combined — the same rule that keeps `region` and `tier` together above.
+  # `from_output_joined` does it in one step: it reads the assets already on
+  # disk, recovers each one's assetType from the envelope's metadata.params, and
+  # emits the id and the measures that type selects on a single row. Two markers
+  # naming that provider are filled from that row, never re-combined — the same
+  # rule that keeps `region` and `tier` together above.
+  #
+  # Two providers could not do this. The second would have to walk the same
+  # envelopes anyway, just to emit rows in the same order, and `zip` would then
+  # hold the pairing together positionally — correlation by coincidence.
 
   typed_assets:
     method: POST
@@ -205,9 +211,10 @@ endpoints:
     method: GET
     path: /assets/{id}/measures
     bind:
-      id: { from: asset_measures }
+      id: { from: asset_measures }     # named after the last identifier in `path`
     query:
-      keys: { from: asset_measures }   # "temperature,humidity" for a pump
+      # `as` because the row's field is named after `select`, not after this key.
+      keys: { from: asset_measures, as: measureType }   # "temperature,humidity"
     limit: 20
     output: output/{source}/typed_measures/{id}.json
 

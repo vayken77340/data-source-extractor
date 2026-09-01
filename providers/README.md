@@ -165,30 +165,58 @@ Two rules keep this from rotting:
 
 ## Joining a parameter file against fetched output
 
-`measure_keys_for_assets` is the worked example of a correlated join. Measure types are a
-fact about an asset's *type*, so asking a valve for its temperature is wrong — and the API
-answers it with an empty 200, so the mistake costs a round trip and looks like data.
+`from_output_joined` covers the shape "what I need for this request depends on which
+request produced the last one". Measure types are a fact about an asset's *type*, so asking
+a valve for its temperature is wrong — and the API answers it with an empty 200, so the
+mistake costs a round trip and looks exactly like data.
 
-`fan_out` cannot express this: `product` crosses every asset against every measure type,
-and `zip` pairs them positionally. The join has to happen in Python, and the key it joins
-on survives the round trip in the envelope's `metadata.params`, which records the params
-each request was planned with.
+It knows nothing about assets or measures. `path` says what to read out of the envelopes,
+`join_on` names the key, `select` names what to attach:
 
 ```yaml
 providers:
   asset_measures:
-    fn: measure_keys_for_assets
-    args: { path: config/params/asset_types.json, endpoint: assets }
+    fn: from_output_joined
+    args:
+      endpoint: assets
+      path: "$.data[*].id.id"
+      file: config/params/asset_types.json
+      join_on: assetType       # a column in the file *and* the param on the envelope
+      select: measureType
 
 endpoints:
   measures:
     method: GET
     path: /assets/{id}/measures
     bind:  { id:   { from: asset_measures } }
-    query: { keys: { from: asset_measures } }   # "temperature,humidity" for a pump
+    query: { keys: { from: asset_measures, as: measureType } }   # "temperature,humidity"
 ```
 
-Both markers name the same provider, so `id` and `keys` are filled from one row and are
-never re-combined. One row per asset rather than one per (asset, measure) pair is
-deliberate: pair rows would collide in `output/…/measures/{id}.json`, and `limit` would
-then cap pairs instead of assets.
+Rows carry two fields: the value, named after the last identifier in `path` exactly as
+`from_output` names its own, and `select` under its own name. Both markers name the same
+provider, so they are filled from one row and never re-combined.
+
+`join_on` is what makes it work — it is simultaneously a column in the file and the param
+recorded in the envelope's `metadata.params`, which the runner writes on every response.
+That is how the asset type that produced a set of ids is still attached to them later,
+without parsing a filename or trusting a field in a body you do not control.
+
+### Why one provider and not two
+
+Two providers on one endpoint are separate groups, and `combine` can only cross or zip
+them. `product` gives 3 assets × 4 measure types = 12 requests where 3 are right.
+
+`zip` would pair them correctly — but only while both lists stay identical in length and
+order. And a second provider supplying the looked-up half would have to walk the same
+envelopes anyway, just to know how many rows to emit and in what order. It costs the same
+work and adds a coupling that breaks silently the first time the two disagree about
+anything. Correlation should be structural, not positional.
+
+One row per value rather than one per pair is deliberate too: pair rows would collide in
+`output/…/measures/{id}.json`, and `limit` would cap pairs instead of assets.
+
+### Naming arguments that YAML will read
+
+`join_on`, not `on`. YAML 1.1 parses a bare `on:` (and `yes:`, `no:`, `off:`) as a boolean,
+so `on: assetType` reaches pydantic as `{True: 'assetType'}` and fails as a parse error
+nowhere near the cause. Worth remembering for any provider argument you add.

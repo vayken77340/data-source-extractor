@@ -19,12 +19,20 @@ defaults:
 
 providers:
   asset_types:
-    fn: excel_column
-    args: { path: input/asset_types.xlsx, sheet: Referentiel, columns: [assetType] }
-  asset_ids:
-    fn: from_output
-    # Quoted: inside a flow mapping, `[` `]` `,` may not appear in a plain scalar.
-    args: { endpoint: assets, path: "$.data[*].id.id" }
+    # Generated from input/asset_types.xlsx by tools/build_params.py — regenerate it when
+    # the business sends a new sheet, or this runs against the old taxonomy.
+    fn: param_file
+    args: { path: config/params/asset_types.json, columns: [assetType] }
+  asset_measures:
+    # Each asset id, paired with the measure types its own assetType selects.
+    # `on` is the join: a column in the file, and the param recorded on the envelope.
+    fn: from_output_joined
+    args:
+      endpoint: assets
+      path: "$.data[*].id.id"
+      file: config/params/asset_types.json
+      join_on: assetType
+      select: measureType
 
 endpoints:
 
@@ -41,10 +49,13 @@ endpoints:
       type: { from: asset_types }
     output: output/{source}/alarms/{type}.json
 
-  assets:                               # POST, payload from Excel
+  assets:                               # POST, payload from the parameter file
     method: POST
     path: /assets/search
     payload:
+      # The key names the param, so each envelope records `params: {assetType: PUMP}`.
+      # That is the join key `measure_keys_for_assets` reads back — renaming it here, or
+      # adding `as:`, would leave the join finding nothing.
       assetType: { from: asset_types }
       pageSize: 100
     fan_out: product
@@ -55,7 +66,9 @@ endpoints:
     method: GET
     path: /assets/{id}/measures
     bind:
-      id: { from: asset_ids }
-    query: { keys: "temperature,humidity" }   # quoted, else YAML reads `humidity` as a key
+      id: { from: asset_measures }      # named after the last identifier in `path`
+    query:
+      # `as` because the row's field is named after `select`, not after this key.
+      keys: { from: asset_measures, as: measureType }   # "temperature,humidity"
     limit: 20
     output: output/{source}/measures/{id}.json
