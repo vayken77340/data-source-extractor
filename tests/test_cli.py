@@ -103,7 +103,7 @@ def test_list_providers(project):
     result = runner.invoke(app, ["list-providers"])
     assert result.exit_code == 0
     assert "literal(values)" in result.output
-    assert "from_output(endpoint, path)  (chains off an endpoint)" in result.output
+    assert "from_output(endpoint, path, fields)  (chains off an endpoint)" in result.output
 
 
 def test_list_providers_picks_up_a_local_provider(project):

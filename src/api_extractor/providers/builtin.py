@@ -34,7 +34,13 @@ def literal(ctx: ProviderContext, *, values: list[dict[str, Any]]) -> list[dict[
 
 
 @provider("from_output", depends_on=lambda args: [args["endpoint"]])
-def from_output(ctx: ProviderContext, *, endpoint: str, path: str) -> list[dict[str, Any]]:
+def from_output(
+    ctx: ProviderContext,
+    *,
+    endpoint: str,
+    path: str,
+    fields: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """Read a JSONPath out of a prior endpoint's saved envelopes.
 
     This is what makes chaining work, and it is deliberately just another provider — the
@@ -42,22 +48,55 @@ def from_output(ctx: ProviderContext, *, endpoint: str, path: str) -> list[dict[
     `run <source> --endpoint measures` works against yesterday's asset files without
     re-hitting the endpoint that produced them.
 
-    A value that surfaced in two envelopes is one row with two parents, not two rows: an
+    `path` selects nodes. `fields` says how to turn each node into a row, mapping a field
+    name to a JSONPath *relative to that node*; left out, the node itself is the value and
+    is named after the last identifier in `path`.
+
+        path: "$.data[*].id"
+        fields: { id: "$.id", entityType: "$.entityType" }
+
+    `fields` is how several values off one object stay correlated. Two providers reading
+    the same object separately would be crossed or zipped instead, and a node missing any
+    requested field is dropped rather than emitted half-filled.
+
+    A row that surfaced in two envelopes is one row with two parents, not two rows: an
     asset can appear under two asset types, and both paths are worth keeping.
     """
     expression = parse_jsonpath(path)
-    field = field_name(path)
-    rows: dict[str, dict[str, Any]] = {}
+    selectors = {name: parse_jsonpath(sub) for name, sub in (fields or {}).items()}
+    names = list(selectors) or [field_name(path)]
+
+    rows: dict[tuple[str, ...], dict[str, Any]] = {}
     for saved in ctx.outputs_for(endpoint):
         for match in expression.find(saved.body):
-            if match.value is None:
+            extracted = extract(match.value, selectors, names)
+            if extracted is None:
                 continue
-            key = f"{type(match.value).__name__}:{match.value}"
-            row = rows.setdefault(key, {field: match.value, PARENTS: []})
+            # Type-tagged, so the integer 1 and the string "1" stay two rows.
+            identity = tuple(f"{type(value).__name__}:{value}" for value in extracted.values())
+            row = rows.setdefault(identity, {**extracted, PARENTS: []})
             parent = str(saved.path)
             if parent not in row[PARENTS]:
                 row[PARENTS].append(parent)
     return list(rows.values())
+
+
+def extract(node: Any, selectors: dict[str, Any], names: list[str]) -> dict[str, Any] | None:
+    """One node's fields, or None when the node — or any requested field — is missing.
+
+    A half-filled row would break the correlation `fields` exists to keep, and a blank
+    parameter is not worth a request.
+    """
+    if not selectors:
+        return None if node is None else {names[0]: node}
+
+    out: dict[str, Any] = {}
+    for name, selector in selectors.items():
+        found = selector.find(node)
+        if not found or found[0].value is None:
+            return None
+        out[name] = found[0].value
+    return out
 
 
 def field_name(json_path: str) -> str:

@@ -144,7 +144,7 @@ def test_a_typo_in_provider_args_does_not_crash_depends_on(env_set, write_source
     data["providers"]["orphan"] = {"fn": "from_output", "args": {"endpoints": "a", "path": "$.x"}}
     report = validate_source(write_source(data, "typo"))
     text = messages(report)
-    assert "providers.orphan.args: do not fit from_output(endpoint, path)" in text
+    assert "providers.orphan.args: do not fit from_output(endpoint, path, fields)" in text
     assert "config.providers.depends_on_targets" not in text
 
 

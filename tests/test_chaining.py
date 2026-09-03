@@ -107,6 +107,76 @@ def test_the_row_field_is_named_after_the_path(json_path, expected):
     assert field_name(json_path) == expected
 
 
+# --- several fields off one node ----------------------------------------------------
+
+
+def entity(value: str, kind: str = "ASSET") -> dict:
+    return {"id": {"id": value, "entityType": kind}}
+
+
+def test_fields_keeps_several_values_off_one_object_together():
+    """`id` and `entityType` describe the same object, so they must not be re-combined."""
+    ctx = ctx_with({"assets": [saved("p0.json", {"data": [entity("a1"), entity("d9", "DEVICE")]})]})
+    rows = from_output(
+        ctx,
+        endpoint="assets",
+        path="$.data[*].id",
+        fields={"id": "$.id", "entityType": "$.entityType"},
+    )
+    assert [(row["id"], row["entityType"]) for row in rows] == [("a1", "ASSET"), ("d9", "DEVICE")]
+
+
+def test_a_node_missing_any_requested_field_is_dropped():
+    """Half a row breaks the correlation that `fields` exists to keep."""
+    ctx = ctx_with(
+        {"assets": [saved("p0.json", {"data": [entity("a1"), {"id": {"id": "a2"}}]})]}
+    )
+    rows = from_output(
+        ctx,
+        endpoint="assets",
+        path="$.data[*].id",
+        fields={"id": "$.id", "entityType": "$.entityType"},
+    )
+    assert [row["id"] for row in rows] == ["a1"]
+
+
+def test_identical_rows_across_envelopes_collapse_with_both_parents():
+    ctx = ctx_with(
+        {
+            "assets": [
+                saved("pump.json", {"data": [entity("shared")]}),
+                saved("valve.json", {"data": [entity("shared")]}),
+            ]
+        }
+    )
+    (row,) = from_output(
+        ctx,
+        endpoint="assets",
+        path="$.data[*].id",
+        fields={"id": "$.id", "entityType": "$.entityType"},
+    )
+    assert row["__parents__"] == ["pump.json", "valve.json"]
+
+
+def test_rows_differing_in_any_field_stay_apart():
+    """Same id, different entityType — one row would silently lose the other."""
+    ctx = ctx_with({"assets": [saved("p0.json", {"data": [entity("x"), entity("x", "DEVICE")]})]})
+    rows = from_output(
+        ctx,
+        endpoint="assets",
+        path="$.data[*].id",
+        fields={"id": "$.id", "entityType": "$.entityType"},
+    )
+    assert [row["entityType"] for row in rows] == ["ASSET", "DEVICE"]
+
+
+def test_without_fields_the_behaviour_is_unchanged():
+    ctx = ctx_with({"assets": [saved("p0.json", {"data": [{"id": "a1"}]})]})
+    assert from_output(ctx, endpoint="assets", path="$.data[*].id") == [
+        {"id": "a1", "__parents__": ["p0.json"]}
+    ]
+
+
 # --- finding envelopes on disk ------------------------------------------------------
 
 
