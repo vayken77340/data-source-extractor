@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from api_extractor.http.client import Request, Response
 from api_extractor.logs import REDACTED
 from api_extractor.persist import envelope, manifest
@@ -45,12 +47,11 @@ def response(**overrides) -> Response:
 
 def build(**overrides) -> dict:
     kwargs = {
-        "run_id": "20260820T101203Z-a1b2c3",
         "spec": SPEC,
         "request": REQUEST,
         "response": response(),
-        "page": 0,
-        "fetched_at": "2026-08-20T10:12:03Z",
+        "base_url": "https://tb.example.com/api",
+        "extracted_at": "2026-08-20T10:12:03Z",
         "auth_headers": ("X-EDF-APIKey",),
     }
     return envelope.build(**{**kwargs, **overrides})
@@ -58,17 +59,61 @@ def build(**overrides) -> dict:
 
 def test_envelope_shape():
     metadata = build()["metadata"]
-    assert metadata["run_id"] == "20260820T101203Z-a1b2c3"
+    assert list(metadata) == [
+        "source",
+        "endpoint",
+        "extracted_at",
+        "params",
+        "request",
+        "response",
+        "parents",
+    ]
     assert metadata["source"] == "thingsboard"
     assert metadata["endpoint"] == "measures"
+    assert metadata["extracted_at"] == "2026-08-20T10:12:03Z"
     assert metadata["params"] == {"id": "9f3c"}
-    assert metadata["page"] == 0
+    assert metadata["request"]["method"] == "GET"
+    assert metadata["request"]["base_url"] == "https://tb.example.com/api"
+    assert metadata["request"]["path"] == "/assets/9f3c/measures"
+    assert metadata["request"]["query"] == {"keys": "temperature,humidity"}
+    assert metadata["request"]["payload"] is None
+    assert metadata["response"] == {"status": 200}
     assert metadata["parents"] == ["output/thingsboard/assets/PUMP_p0.json"]
-    assert metadata["response"] == {
-        "status": 200,
-        "headers": {"content-type": "application/json"},
-        "elapsed_ms": 143,
-    }
+
+
+def test_base_url_and_path_reassemble_the_sent_url():
+    request = build()["metadata"]["request"]
+    assert request["base_url"] + request["path"] == REQUEST.url
+
+
+def test_a_trailing_slash_on_base_url_does_not_leak_into_the_path():
+    request = build(base_url="https://tb.example.com/api/")["metadata"]["request"]
+    assert (request["base_url"], request["path"]) == (
+        "https://tb.example.com/api",
+        "/assets/9f3c/measures",
+    )
+
+
+def test_a_request_sent_elsewhere_than_base_url_is_refused():
+    """A base and a path that do not add up to what was sent would be a recorded lie."""
+    with pytest.raises(ValueError, match="was not sent under base_url"):
+        build(base_url="https://other.example.com")
+
+
+def test_removed_fields_stay_removed():
+    """Each of these left for a reason (see the module docstring); none may creep back."""
+    metadata = build()["metadata"]
+    assert "run_id" not in metadata
+    assert "page" not in metadata
+    assert "fetched_at" not in metadata
+    assert "url" not in metadata["request"]
+    assert set(metadata["response"]) == {"status"}
+
+
+def test_a_non_json_response_lands_as_body_raw():
+    built = build(response=response(parsed=False, body=None, text="<html>nope</html>"))
+    assert built["body"] is None
+    assert built["body_raw"] == "<html>nope</html>"
 
 
 def test_a_known_sensitive_header_is_redacted():

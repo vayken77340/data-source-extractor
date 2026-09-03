@@ -208,25 +208,30 @@ winning, and errors raised loudly.
 ```json
 {
   "metadata": {
-    "run_id": "20260820T101203Z-a1b2c3",
     "source": "test",
     "endpoint": "measures",
+    "extracted_at": "2026-08-20T10:12:03Z",
     "params": { "id": "9f3c..." },
     "request": {
       "method": "GET",
-      "url": "https://tb.example.com/api/assets/9f3c.../measures",
+      "base_url": "https://tb.example.com/api",
+      "path": "/assets/9f3c.../measures",
       "query": { "keys": "temperature,humidity" },
       "payload": null,
       "headers": { "Authorization": "***REDACTED***" }
     },
-    "response": { "status": 200, "headers": {}, "elapsed_ms": 143 },
-    "page": 0,
-    "parents": ["output/test/assets/PUMP_p0.json"],
-    "fetched_at": "2026-08-20T10:12:03Z"
+    "response": { "status": 200 },
+    "parents": ["output/test/assets/PUMP_p0.json"]
   },
   "body": {}
 }
 ```
+
+> Revised after the build: `run_id`, `page`, `request.url`, `response.headers` and
+> `response.elapsed_ms` left the envelope once it became a contract handed to an external
+> team. The run id lives in the manifest, the page cursor is already verbatim in `query`
+> or `payload`, and one URL that silently omitted the query string was replaced by
+> `base_url` plus `path`. `persist/envelope.py` records the reasoning.
 
 - `body` is the parsed JSON, **byte-for-byte semantically unmodified** — no key
   reordering, no coercion, no unwrapping.

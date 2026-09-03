@@ -4,6 +4,24 @@
 unwrapping. Nothing here validates, cleans, flattens or profiles it. When the response is
 not JSON, `body` is null and `body_raw` holds the text verbatim.
 
+`metadata` is a contract: the specification handed to whoever lands these files in a
+warehouse describes it attribute by attribute, and a test pins that description to what
+this module writes. Every field is here for a reason, and nothing is here for free:
+
+- `params` is load-bearing — a chained provider joins on it to recover which request
+  produced a record, including `label` values that were never sent.
+- `request` is what actually went out. `base_url` and `path` are two honest fields rather
+  than one URL, because a hand-encoded query string can disagree with what the client
+  sent; `query` and `payload` are verbatim and carry the page cursor where the API saw it.
+- `response.status` is non-negotiable in an immutable zone: 403s and HTML error pages are
+  landed on purpose, and the status is how they are told apart later.
+- `parents` is the only cross-file provenance: which files this request's params were read
+  from. A list, because an asset can surface under two asset types.
+
+Not here, deliberately: the run id (the manifest is keyed by it), the page number (it is
+already in `query` or `payload`, verbatim, and in the filename), response headers and
+timing (diagnostics — `-v` traces them, the manifest keeps the timing).
+
 Sensitive request headers are redacted at write time, not at read time.
 """
 
@@ -42,37 +60,45 @@ def redact_headers(headers: Mapping[str, str], also: Iterable[str] = ()) -> dict
     }
 
 
+def split_url(url: str, base_url: str) -> tuple[str, str]:
+    """`base_url` and the path that was sent under it, so the two reassemble the URL.
+
+    The path is taken off the request that actually went out rather than off the spec, and
+    the base is checked against it: recording a base and a path that do not add up to what
+    was sent would be the one lie this file must never tell.
+    """
+    base = base_url.rstrip("/")
+    if not url.startswith(base + "/") and url != base:
+        raise ValueError(f"request url {url!r} was not sent under base_url {base_url!r}")
+    return base, url[len(base) :] or "/"
+
+
 def build(
     *,
-    run_id: str,
     spec: RequestSpec,
     request: Request,
     response: Response,
-    page: int,
-    fetched_at: str,
+    base_url: str,
+    extracted_at: str,
     auth_headers: Iterable[str] = (),
 ) -> dict[str, Any]:
+    base, path = split_url(request.url, base_url)
     envelope: dict[str, Any] = {
         "metadata": {
-            "run_id": run_id,
             "source": spec.source,
             "endpoint": spec.endpoint,
+            "extracted_at": extracted_at,
             "params": dict(spec.params),
             "request": {
                 "method": request.method,
-                "url": request.url,
+                "base_url": base,
+                "path": path,
                 "query": dict(request.query),
                 "payload": request.payload,
                 "headers": redact_headers(request.headers, auth_headers),
             },
-            "response": {
-                "status": response.status,
-                "headers": dict(response.headers),
-                "elapsed_ms": response.elapsed_ms,
-            },
-            "page": page,
+            "response": {"status": response.status},
             "parents": list(spec.parents),
-            "fetched_at": fetched_at,
         },
         "body": response.body if response.parsed else None,
     }

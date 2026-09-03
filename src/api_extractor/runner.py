@@ -253,12 +253,11 @@ def _one(
     envelope.write(
         path,
         envelope.build(
-            run_id=run_id,
             spec=spec,
             request=sent,
             response=response,
-            page=page,
-            fetched_at=manifest.utc_now(),
+            base_url=source.base_url,
+            extracted_at=manifest.utc_now(),
             auth_headers=authenticator.header_names(),
         ),
     )

@@ -288,16 +288,16 @@ Each file is an envelope: the response body plus how it was fetched.
 ```json
 {
   "metadata": {
-    "run_id": "20260820T101203Z-a1b2c3",
     "source": "test",
     "endpoint": "measures",
-    "params": { "id": "PUMP-1" },
-    "request": { "method": "GET", "url": "...", "query": {}, "payload": null,
-                 "headers": { "Authorization": "***REDACTED***" } },
-    "response": { "status": 200, "headers": {}, "elapsed_ms": 143 },
-    "page": 0,
-    "parents": ["output/test/assets/PUMP_p0.json"],
-    "fetched_at": "2026-08-20T10:12:03Z"
+    "extracted_at": "2026-08-20T10:12:03Z",
+    "params": { "id": "PUMP-1", "assetType": "PUMP", "assetName": "Pompe 1" },
+    "request": { "method": "GET",
+                 "base_url": "https://tb.example.com/api", "path": "/assets/PUMP-1/measures",
+                 "query": { "keys": "temperature,humidity" }, "payload": null,
+                 "headers": { "Accept": "application/json", "Authorization": "***REDACTED***" } },
+    "response": { "status": 200 },
+    "parents": ["output/test/assets/PUMP_p0.json"]
   },
   "body": {}
 }
@@ -308,8 +308,19 @@ Each file is an envelope: the response body plus how it was fetched.
   holds the text.
 - **Error responses are saved too.** A 403 or an HTML error page is real information about
   the API and belongs on disk, not swallowed.
+- `params` is every resolved value, including `label` values that were never sent. It is
+  what a chained provider joins on.
+- `request` is what went out: `base_url` and `path` reassemble the URL, and `query` or
+  `payload` carry the page cursor exactly where the API saw it — which is why there is
+  no separate page number.
 - `parents` is lineage: which asset file produced this id. It is a list because an asset
   can surface under two asset types, and both paths are worth keeping.
+- The run id is not in the file. The manifest is keyed by it, and response headers and
+  timing live there and in the `-v` trace, not in every envelope.
+
+`metadata` is a contract. `tools/build_spec.py` describes it, attribute by attribute, in
+the specification it generates, and a test pins that description to what `envelope.py`
+writes.
 
 `output/_runs/<run_id>.jsonl` has one JSON line per attempted request — endpoint, params,
 status, output path, duration, parents, error — including skips. It is the index that
@@ -341,7 +352,7 @@ asset files without re-hitting `/assets/search`.
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest          # 259 tests, no test makes a real network call
+python -m pytest          # no test makes a real network call
 ```
 
 The code is type-hinted throughout, but nothing enforces it — there is no linter or type

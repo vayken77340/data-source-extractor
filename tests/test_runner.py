@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import httpx
 import pytest
@@ -63,7 +64,9 @@ def test_a_single_request_is_issued_and_written(httpx_mock, client, tmp_path, mo
     assert (result.written, result.skipped, result.failed) == (1, 0, 0)
     written = envelope.read(tmp_path / "demo" / "ping.json")
     assert written["body"] == {"pong": True}
-    assert written["metadata"]["run_id"] == result.run_id
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", written["metadata"]["extracted_at"])
+    # The run id lives in the manifest, which is keyed by it — not in every file.
+    assert manifest.read(result.manifest_path)[0]["run_id"] == result.run_id
 
 
 def test_defaults_headers_are_sent(httpx_mock, client, tmp_path, monkeypatch):
@@ -252,9 +255,12 @@ def test_a_walk_writes_one_file_per_page(httpx_mock, client, tmp_path, monkeypat
         envelope.read(tmp_path / "demo" / f"things_p{n}.json")["body"]["data"] for n in range(3)
     ]
     assert bodies == [[1, 2], [3, 4], [5]]
+    # No top-level page number: the cursor is already in the query, verbatim, where the
+    # API saw it — and the filename carries it too.
     assert [
-        envelope.read(tmp_path / "demo" / f"things_p{n}.json")["metadata"]["page"] for n in range(3)
-    ] == [0, 1, 2]
+        envelope.read(tmp_path / "demo" / f"things_p{n}.json")["metadata"]["request"]["query"]
+        for n in range(3)
+    ] == [{"per_page": 100, "page": 0}, {"per_page": 100, "page": 1}, {"per_page": 100, "page": 2}]
 
 
 def test_the_cursor_increments_from_start(httpx_mock, client, tmp_path, monkeypatch):
