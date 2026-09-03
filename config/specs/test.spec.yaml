@@ -1,0 +1,75 @@
+# What config/sources/test.yaml cannot know. Keys are English identifiers matched against
+# the source; prose is French because it lands in the document verbatim.
+#
+# Anything the source YAML already says is an unknown key here and fails to parse.
+# `[À COMPLÉTER]` is accepted anywhere a string is; `tools/build_spec.py test --check`
+# counts what is left.
+
+spec:
+  version: "0.1"
+  status: draft
+  owner: "[À COMPLÉTER]"
+  author: "[À COMPLÉTER]"
+  date: "03/09/2026"
+  implementation_team: "[À COMPLÉTER]"
+  source_system: ThingsBoard
+  vendor_docs: "[À COMPLÉTER]"
+
+secrets: OpenBao
+
+landing:
+  bucket: "[À COMPLÉTER]"
+  prefix: raw
+  key: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"
+
+environments:
+  qa:
+    base_url: "[À COMPLÉTER]"
+    notes: "[À COMPLÉTER — préciser si les données sont figées et si les identifiants d'actifs diffèrent de la production]"
+
+definitions:
+  Actif (asset): "[À COMPLÉTER — au sens du fournisseur, pas au sens interne]"
+  Mesure (measure): "[À COMPLÉTER — préciser sans ambiguïté s'il s'agit d'une définition de point de mesure ou d'un relevé horodaté]"
+  Alarme (alarm): "[À COMPLÉTER]"
+
+lists:
+  # A human name for a parameter list; the derived phrase is correct but clumsy as a
+  # heading. The mechanics (file, columns, JSONPaths) still come from the source.
+  asset_types:
+    name: types d'actifs
+  asset_measures:
+    name: mesures par actif
+    note: "Les grandeurs que le type de l'actif déclare, et elles seules : demander sa température à une vanne renvoie un 200 vide."
+
+endpoints:
+
+  tenant_info:
+    purpose: "Renvoie les informations du tenant. Appelé une fois par exécution, sans paramétrage."
+    record_grain: "[À COMPLÉTER]"
+    mode: full
+    rationale: "Volume négligeable, aucun paramètre de filtrage disponible."
+
+  alarms:
+    purpose: "Renvoie les alarmes actives, une requête par type d'actif."
+    record_grain: "[À COMPLÉTER — une ligne par occurrence d'alarme, ou par alarme courante ?]"
+    quirks:
+      - "La réponse ne porte pas le type d'actif interrogé : l'association n'existe que dans metadata.params."
+      - "[À COMPLÉTER — format et fuseau des horodatages]"
+      - "[À COMPLÉTER — durée de rétention des alarmes à la source]"
+
+  assets:
+    purpose: "Inventaire des actifs pour un type donné. Endpoint pilote : la totalité de la chaîne en dépend."
+    record_grain: "[À COMPLÉTER]"
+    mode: full
+    quirks:
+      - "La pagination est portée par le corps de la requête, pas par la chaîne de requête. Une implémentation calquée sur les autres endpoints ne paginera pas."
+      - "[À COMPLÉTER — l'identifiant d'actif est-il stable dans le temps ?]"
+
+  measures:
+    purpose: "Mesures d'un actif, restreintes aux grandeurs que son type déclare."
+    record_grain: "[À COMPLÉTER — définition de point de mesure ou relevé ?]"
+    quirks:
+      - "La réponse ne contient aucun identifiant d'actif. Le lien n'existe que par metadata.params.id, écrit au moment de l'atterrissage."
+      - "Le croisement type d'actif x grandeur n'est pas un produit cartésien : demander sa température à une vanne renvoie un 200 vide, indiscernable d'une absence de données."
+      - "[À COMPLÉTER — les identifiants de mesure sont-ils uniques globalement ou seulement par actif ?]"
+      - "[À COMPLÉTER — unités de mesure présentes dans la charge utile ou implicites ?]"

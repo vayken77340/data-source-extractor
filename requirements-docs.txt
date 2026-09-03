@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Only tools/build_spec.py needs this: the extractor must never need a Word library to
+# fetch JSON. `--check` and `--model-only` run without it; the .docx renderer does not.
+# openpyxl (the workbook) is already in requirements.txt for the spreadsheet provider.
+docxtpl>=0.16

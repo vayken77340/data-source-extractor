@@ -330,6 +330,48 @@ Because `from_output` reads whatever is already on disk,
 `python main.py run test --endpoint measures` works against yesterday's
 asset files without re-hitting `/assets/search`.
 
+## Handing the extraction to another team
+
+`tools/build_spec.py` turns a source into a **technical specification in French** — a
+`.docx`, a companion `.xlsx`, and redacted sample files — for a team that will build its
+own pipeline and has never seen this repository. The document never mentions the tool:
+providers become phrases (*« assetType du référentiel (7 valeurs) »*), sampling caps are
+omitted, and the landing contract of §6.3 is generated from `envelope.py` and pinned to it
+by a test, so the document cannot describe metadata the code does not write.
+
+```bash
+pip install -r requirements-docs.txt         # docxtpl; the extractor itself never needs it
+python tools/build_spec.py test --check      # every problem in one pass, writes nothing
+python tools/build_spec.py test              # output/_docs/test/: .docx, .xlsx, spec.json, samples/
+python tools/build_spec.py test --variables  # what a template tag may reference
+```
+
+Four inputs, assembled into one JSON model before anything is rendered:
+
+| input | holds | who writes it |
+|---|---|---|
+| `config/sources/<name>.yaml` | the mechanical facts | you, already |
+| `config/specs/<name>.spec.yaml` | what the YAML cannot know: purpose, record grain, quirks, where files land | you, in French |
+| `config/specs/TEMPLATE.docx` | the prose and layout, with Jinja tags where values go | you, in Word |
+| `output/` | measured volumes, response shapes, samples | a run |
+
+**The annotation never restates the source YAML.** Any field the generator can read
+elsewhere is an unknown key there. `[À COMPLÉTER]` is accepted anywhere a string is;
+`--check` counts what is left and `--min-complete N` turns that into a gate.
+
+**The template is yours to edit.** Reword, reorder, delete a callout, add a column that
+shows another field of the same row, restyle. `--check` catches the rest before a file is
+written: a tag Word split across runs, a tag naming a field the model does not have (with
+the nearest valid names), a required section removed by accident. A per-source
+`config/specs/<name>.template.docx` wins over the default when present.
+
+`--check` also fails on an endpoint with no annotation, an annotation naming a vanished
+endpoint, a landing-key placeholder the endpoint cannot fill (every file would collapse
+onto one key), a paginated endpoint whose key has no `{page}`, and a secret value that
+somehow reached the model or a sample — the same two-layer defence as the log scrubber.
+
+`output/_docs/` is under `output/`, so it is gitignored: the samples are real data.
+
 ## Secrets
 
 - Credentials are **only ever `env:` references** in YAML. Validation fails on an unset var

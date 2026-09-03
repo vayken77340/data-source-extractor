@@ -46,9 +46,13 @@ def test_every_builtin_provider_is_documented():
 def test_the_dependency_files_are_documented():
     assert "requirements.txt" in README
     assert "requirements-dev.txt" in README
+    assert "requirements-docs.txt" in README
 
 
-@pytest.mark.parametrize("path", ["config/TEMPLATE.yaml", "providers/"])
+@pytest.mark.parametrize(
+    "path",
+    ["config/TEMPLATE.yaml", "providers/", "tools/build_spec.py", "config/specs/TEMPLATE.docx"],
+)
 def test_linked_paths_exist(path):
     assert path in README
     assert (REPO_ROOT / path).exists()
