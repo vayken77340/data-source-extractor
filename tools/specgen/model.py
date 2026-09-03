@@ -1,0 +1,931 @@
+"""Build the intermediate model: everything the document says, as one JSON-able dict.
+
+The .docx and the .xlsx are projections of this and compute nothing. Every reader-facing
+string here is final French text; numbers that a spreadsheet wants as numbers are carried
+raw alongside their text. The model is what a reviewer diffs and what the tests assert
+on, which is how the document is testable without opening Word.
+
+Derivation uses the config layer, the graph and the planner — never a provider's name.
+A provider is *static* or *chained* by what its `depends_on` hook says, so a provider
+written next year renders correctly without this file learning about it.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from api_extractor.config import graph
+from api_extractor.config.models import Endpoint, FromMarker, Source, placeholders
+from api_extractor.config.validate import endpoint_params
+from api_extractor.http import pagination
+from api_extractor.http.client import Request, Response
+from api_extractor.logs import REDACTED
+from api_extractor.persist import envelope
+from api_extractor.plan import binding
+from api_extractor.plan.binding import RequestSpec
+from api_extractor.providers import registry
+from api_extractor.providers.registry import ProviderContext
+from specgen import contract, evidence as ev, labels
+from specgen.annotation import LANDING_KEYS, Annotation
+from specgen.labels import TODO
+
+SCHEMA = "spec-model/1"
+STATIC, CHAINED = "static", "chained"
+
+# Provider args rendered under a readable label. Anything else renders under its own
+# name, which is precise if not pretty; endpoint names and file paths are handled apart.
+ARG_LABELS = {
+    "path": "Chemin des enregistrements",
+    "columns": "Colonnes retenues",
+    "join_on": "Clé de rapprochement",
+    "select": "Valeurs rattachées",
+    "separator": "Séparateur",
+    "sheet": "Feuille",
+    "file": "Table de correspondance",
+    "values": "Valeurs",
+}
+ATTACHED_FILE = "référentiel joint à ce document"
+STATIC_ORIGIN = "référentiel joint à ce document ({count})"
+CHAINED_ORIGIN = "réponses de {method} {path} déjà déposées"
+FIELD_RELATIVE = "{path}   (relatif à l'enregistrement)"
+EXAMPLE_BODY = {"…": "la réponse de l'API pour cette page, verbatim"}
+SAMPLE_FILE = "{endpoint}_exemple.json"
+WORKBOOK_FILE = "Spec_Extraction_API_{source}_Annexes.xlsx"
+DOCUMENT_FILE = "Spec_Extraction_API_{source}.docx"
+
+
+@dataclass(frozen=True)
+class Built:
+    """The model, plus the sample files that go next to the document rather than in it."""
+
+    model: dict[str, Any]
+    samples: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProviderInfo:
+    name: str
+    kind: str
+    targets: tuple[str, ...]
+    rows: list[dict[str, Any]] | None
+    error: str | None
+    fields: tuple[str, ...]
+    phrase: str  # with the count: "assetType du référentiel (7 valeurs)"
+    short: str  # without: "assetType du référentiel"
+    note: str | None
+
+    @property
+    def count(self) -> int | None:
+        return None if self.rows is None else len(self.rows)
+
+
+# --- ordering -----------------------------------------------------------------------
+
+
+def document_order(source: Source) -> list[str]:
+    """Reader order: by dependency level, drivers before leaves, alphabetical after that.
+
+    The runner's order is alphabetical within a level, which puts `alarms` before the
+    endpoint the whole chain hangs off. A reader wants the driver first. Endpoints of one
+    level are independent, and §4.2 says so.
+    """
+    deps = graph.known(graph.dependencies(source))
+    dependents = {name: {other for other in deps if name in deps[other]} for name in deps}
+    ordered: list[str] = []
+    done: set[str] = set()
+    while len(ordered) < len(deps):
+        ready = [name for name in deps if name not in done and deps[name] <= done]
+        if not ready:  # pragma: no cover - validation rejects cycles before we get here
+            raise graph.CycleError(sorted(set(deps) - done))
+        ready.sort(key=lambda name: (not dependents[name], name))
+        ordered.extend(ready)
+        done.update(ready)
+    return ordered
+
+
+# --- providers ----------------------------------------------------------------------
+
+
+def describe_providers(
+    source: Source, annotation: Annotation, ctx: ProviderContext, cache: dict
+) -> dict[str, ProviderInfo]:
+    """Run every provider once and describe it without ever naming its function.
+
+    Static providers read files, so running them costs nothing and yields the count and
+    field names the document wants. Chained ones read envelopes, and yield rows only when
+    a run has left some on disk.
+    """
+    infos: dict[str, ProviderInfo] = {}
+    for name, decl in source.providers.items():
+        targets: tuple[str, ...] = ()
+        if registry.is_registered(decl.fn) and registry.get(decl.fn).signature_error(decl.args) is None:
+            targets = tuple(registry.get(decl.fn).endpoints_needed(decl.args))
+        kind = CHAINED if targets else STATIC
+        rows, error = None, None
+        try:
+            rows = binding.run_provider(source, name, ctx, cache)
+        except Exception as exc:  # provider bodies are an I/O boundary
+            error = f"{type(exc).__name__}: {exc}"
+        fields = _fields_of(rows, decl.args)
+        note = annotation.lists.get(name)
+        infos[name] = ProviderInfo(
+            name=name,
+            kind=kind,
+            targets=targets,
+            rows=rows,
+            error=error,
+            fields=fields,
+            phrase=_phrase(source, kind, targets, fields, rows, note.name if note else None, True),
+            short=_phrase(source, kind, targets, fields, rows, note.name if note else None, False),
+            note=note.note if note else None,
+        )
+    return infos
+
+
+def _fields_of(rows: list[dict[str, Any]] | None, args: Mapping[str, Any]) -> tuple[str, ...]:
+    if rows:
+        return tuple(key for key in rows[0] if not binding.is_reserved(key))
+    declared = args.get("fields")
+    if isinstance(declared, Mapping):
+        return tuple(declared)
+    columns = args.get("columns")
+    if isinstance(columns, list):
+        return tuple(str(column) for column in columns)
+    return ()
+
+
+def _phrase(
+    source: Source,
+    kind: str,
+    targets: tuple[str, ...],
+    fields: tuple[str, ...],
+    rows: list | None,
+    name: str | None,
+    with_count: bool,
+) -> str:
+    count = labels.plural(len(rows), "valeur") if rows is not None and with_count else None
+    if name is not None:
+        return labels.NAMED_LIST_COUNT.format(name=name, count=count) if count else name
+    if kind == CHAINED:
+        target = source.endpoints.get(targets[0])
+        if target is None:  # validation reports this; the phrase must still exist
+            return f"enregistrement issu de {targets[0]}"
+        return labels.CHAINED_LIST.format(method=target.method, path=target.path)
+    label = " / ".join(fields) if fields else "valeur"
+    if count:
+        return labels.STATIC_LIST_COUNT.format(fields=label, count=count)
+    return labels.STATIC_LIST.format(fields=label)
+
+
+def list_rows(source: Source, info: ProviderInfo) -> list[dict[str, str]]:
+    """§4.3: how to obtain one parameter list, in generic terms.
+
+    Args naming an endpoint render as that endpoint's method and path; args pointing at a
+    file under `config/` or `input/` render as the attached referential — the document
+    never mentions this repo's layout (rule 6). Everything else is precise vocabulary the
+    external team needs verbatim: a JSONPath, a join key.
+    """
+    decl = source.providers[info.name]
+    rows: list[dict[str, str]] = []
+    if info.kind == CHAINED:
+        target = source.endpoints.get(info.targets[0])
+        if target is not None:
+            rows.append(
+                _row("Origine", CHAINED_ORIGIN.format(method=target.method, path=target.path))
+            )
+    else:
+        count = labels.plural(info.count, "valeur") if info.count is not None else "—"
+        rows.append(_row("Origine", STATIC_ORIGIN.format(count=count)))
+    for key, value in decl.args.items():
+        if isinstance(value, str) and value in source.endpoints:
+            continue
+        if isinstance(value, str) and value.startswith(("config/", "input/")):
+            rows.append(_row("Référentiel", ATTACHED_FILE))
+        elif key == "fields" and isinstance(value, Mapping):
+            for field_name, path in value.items():
+                rows.append(_row(f"Valeur « {field_name} »", FIELD_RELATIVE.format(path=path)))
+        elif key == "values" and isinstance(value, list):
+            rows.append(_row(ARG_LABELS["values"], _values_text(value)))
+        elif isinstance(value, list):
+            rows.append(_row(ARG_LABELS.get(key, key), ", ".join(str(item) for item in value)))
+        else:
+            rows.append(_row(ARG_LABELS.get(key, key), str(value)))
+    if info.fields:
+        rows.append(_row("Champs de chaque enregistrement", ", ".join(info.fields)))
+    if info.note:
+        rows.append(_row("Signification", info.note))
+    return rows
+
+
+def _values_text(values: list[Any]) -> str:
+    items = []
+    for value in values:
+        if isinstance(value, Mapping) and len(value) == 1:
+            items.append(str(next(iter(value.values()))))
+        else:
+            items.append(json.dumps(value, ensure_ascii=False))
+    return ", ".join(items)
+
+
+def _row(item: str, value: str) -> dict[str, str]:
+    return {"item": item, "value": value}
+
+
+# --- one endpoint -------------------------------------------------------------------
+
+
+def param_rows(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[dict[str, str]]:
+    rows = [_param(key, "path", "", marker, infos) for key, marker in ep.bind.items()]
+    rows.extend(_walk_params(ep.query, "query", "", None, infos))
+    rows.extend(_walk_params(ep.payload, "payload", "", None, infos))
+    rows.extend(_param(key, "label", "", marker, infos) for key, marker in ep.label.items())
+    return rows
+
+
+def _walk_params(node: Any, root: str, prefix: str, key: str | None, infos) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if isinstance(node, FromMarker):
+        rows.append(_param(node.alias or key or "?", root, prefix, node, infos))
+    elif isinstance(node, Mapping):
+        for child, value in node.items():
+            loc = f"{prefix}.{child}" if prefix else child
+            if isinstance(value, FromMarker | Mapping | list):
+                rows.extend(_walk_params(value, root, loc, child, infos))
+            else:
+                rows.append(
+                    {
+                        "name": child,
+                        "location": _location(root, loc, nested=bool(prefix)),
+                        "type": labels.type_of(value),
+                        "origin": labels.FIXED_VALUE.format(value=value),
+                    }
+                )
+    elif isinstance(node, list):
+        if any(_has_marker(item) for item in node):
+            for i, item in enumerate(node):
+                rows.extend(_walk_params(item, root, f"{prefix}[{i}]", key, infos))
+        elif key is not None:
+            rows.append(
+                {
+                    "name": key,
+                    "location": _location(root, prefix, nested="." in prefix),
+                    "type": labels.type_of(node),
+                    "origin": labels.FIXED_VALUE.format(value=json.dumps(node, ensure_ascii=False)),
+                }
+            )
+    return rows
+
+
+def _has_marker(node: Any) -> bool:
+    if isinstance(node, FromMarker):
+        return True
+    if isinstance(node, Mapping):
+        return any(_has_marker(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_marker(value) for value in node)
+    return False
+
+
+def _param(name: str, root: str, loc: str, marker: FromMarker, infos) -> dict[str, str]:
+    info = infos.get(marker.provider)
+    return {
+        "name": name,
+        "location": _location(root, loc, nested="." in loc or "[" in loc),
+        "type": _marker_type(name, info),
+        "origin": info.phrase if info else marker.provider,
+    }
+
+
+def _location(root: str, loc: str, *, nested: bool) -> str:
+    text = labels.LOCATION[root]
+    return f"{text} ({loc})" if nested and loc else text
+
+
+def _marker_type(name: str, info: ProviderInfo | None) -> str:
+    """The type of the value a marker will carry, read off a real row when one exists."""
+    if info is None or not info.rows:
+        return labels.TYPE[str]
+    fields = {key: value for key, value in info.rows[0].items() if not binding.is_reserved(key)}
+    try:
+        return labels.type_of(binding.select(info.name, fields, name))
+    except ValueError:
+        return labels.TYPE[str]
+
+
+def correlated_origins(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str]:
+    """Several params off one provider come from one record and must stay together."""
+    used = [ref.marker.provider for ref in ep.markers()]
+    shared = sorted({name for name in used if used.count(name) > 1})
+    return [labels.CORRELATED.format(origin=infos[name].phrase) for name in shared if name in infos]
+
+
+def pagination_rows(ep: Endpoint) -> list[dict[str, str]]:
+    """Empty when the endpoint does not paginate: an absence is never mentioned."""
+    paginate = ep.paginate
+    if paginate is None:
+        return []
+    return [
+        _row("Pagination portée par", labels.CURSOR_ROOT[paginate.at_root]),
+        _row("Emplacement du curseur", paginate.at),
+        _row("Index de première page", str(paginate.start)),
+        _row("Signal de continuation", paginate.has_more or "aucun"),
+        _row("La boucle s'arrête quand", stop_condition(ep)),
+    ]
+
+
+def stop_condition(ep: Endpoint) -> str:
+    """Both halves. The walk stops on an empty page whatever `has_more` says."""
+    paginate = ep.paginate
+    assert paginate is not None
+    if paginate.has_more is None:
+        return labels.STOP_EMPTY
+    return labels.STOP_EITHER.format(
+        empty=labels.STOP_EMPTY, flag=labels.STOP_FLAG.format(path=paginate.has_more)
+    )
+
+
+def iteration_lines(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str]:
+    """Pseudocode a reader can implement. The loop is over rows, not over one parameter:
+    a provider emits rows, so several params off one row stay correlated."""
+    providers = sorted({ref.marker.provider for ref in ep.markers()})
+    lines: list[str] = []
+    if providers:
+        joined = ", ".join(infos[name].short if name in infos else name for name in providers)
+        lines.append(f"pour chaque {joined} :")
+    indent = "    " if providers else ""
+    paginate = ep.paginate
+    if paginate is None:
+        lines.append(f"{indent}{ep.method} {ep.path}")
+        lines.append(f"{indent}déposer la réponse dans un fichier          (§6)")
+        return lines
+    lines.append(f"{indent}page := {paginate.start}")
+    lines.append(f"{indent}répéter")
+    lines.append(f"{indent}    réponse := {ep.method} {ep.path}")
+    lines.append(f"{indent}                 {paginate.at} = page")
+    lines.append(f"{indent}    déposer la réponse dans un fichier          (§6)")
+    lines.append(f"{indent}    page := page + 1")
+    lines.append(f"{indent}jusqu'à ce que {stop_condition(ep)}")
+    return lines
+
+
+def called_text(ep: Endpoint, infos: Mapping[str, ProviderInfo], planned: int | None) -> str:
+    providers = sorted({ref.marker.provider for ref in ep.markers()})
+    if not providers:
+        return labels.CALLED_ONCE
+    origins = ", ".join(infos[name].short if name in infos else name for name in providers)
+    if planned:
+        return labels.CALLED_COUNT.format(count=labels.plural(planned, "fois", "fois"), origins=origins)
+    return labels.CALLED_PER.format(origins=origins)
+
+
+def volume_text(ep: Endpoint, infos: Mapping[str, ProviderInfo], planned: int | None) -> str:
+    providers = sorted({ref.marker.provider for ref in ep.markers()})
+    if not providers:
+        text = "1"
+    elif planned:
+        text = labels.fr_int(planned)
+    else:
+        chained = [name for name in providers if name in infos and infos[name].kind == CHAINED]
+        origin = infos[chained[0]].short if chained else infos[providers[0]].short
+        text = labels.VOLUME_UNKNOWN.format(origin=origin)
+    return text + (labels.VOLUME_PAGES if ep.paginate else "")
+
+
+def render_key(template: str, source: str, endpoint: str, params: Mapping[str, Any], *, extract_date: str, page: int = 0) -> str:
+    """Fill a landing key. An unresolvable placeholder renders as `<name>` rather than
+    raising: `--check` reports it, and the model must still build for the report."""
+    values: dict[str, Any] = {
+        **params,
+        "source": source,
+        "endpoint": endpoint,
+        "page": page,
+        "slug": binding.slug_for(params),
+        "extract_date": extract_date,
+    }
+    return binding.PLACEHOLDER_RE.sub(
+        lambda match: str(values.get(match.group(1), f"<{match.group(1)}>")), template
+    )
+
+
+def full_key(annotation: Annotation, key: str) -> str:
+    """The bucket is one slot, counted once on the layout table — not once per key."""
+    bucket = "<bucket>" if labels.is_todo(annotation.landing.bucket) else annotation.landing.bucket
+    prefix = f"/{annotation.landing.prefix.strip('/')}" if annotation.landing.prefix else ""
+    return f"s3://{bucket}{prefix}/{key}"
+
+
+# --- the model ----------------------------------------------------------------------
+
+
+def build(
+    source: Source,
+    annotation: Annotation,
+    evidence: ev.Evidence | None = None,
+    *,
+    sample_records: int = 3,
+    generated_at: datetime | None = None,
+) -> Built:
+    evidence = evidence or ev.Evidence()
+    now = generated_at or datetime.now(UTC)
+    today = now.strftime("%Y-%m-%d")
+    ctx = ProviderContext(
+        run_id="spec",
+        output_root=Path("output"),
+        source_name=source.source,
+        outputs_for=evidence.for_endpoint,
+    )
+    cache: dict[str, list[dict[str, Any]]] = {}
+    infos = describe_providers(source, annotation, ctx, cache)
+    order = document_order(source)
+    deps = graph.known(graph.dependencies(source))
+    dependents = {name: sorted(other for other in order if name in deps[other]) for name in order}
+    names = sorted(source.endpoints)
+
+    # Planned once with every sampling cap removed: the document describes the extraction,
+    # not this tool's sampling of it. Chained endpoints count only when parents are on disk.
+    plans = {name: binding.plan_one(source, name, ctx, cache, no_limit=True) for name in order}
+
+    samples: dict[str, dict[str, Any]] = {}
+    endpoints: list[dict[str, Any]] = []
+    for number, name in enumerate(order, start=1):
+        ep = source.endpoints[name]
+        ann = annotation.endpoint(name)
+        plan = plans[name]
+        planned = len(plan.requests) if plan.error is None else 0
+        measured = ev.measured(evidence, name)
+        on_disk = evidence.for_endpoint(name)
+
+        sample = ev.sample_for(evidence, name)
+        sample_entry = None
+        if sample is not None and not (ann.sample and ann.sample.exclude):
+            document, cut = ev.sample_document(
+                sample, keep=sample_records, json_paths=ann.sample.redact if ann.sample else ()
+            )
+            file_name = SAMPLE_FILE.format(endpoint=name)
+            samples[file_name] = document
+            sample_entry = {
+                "endpoint": name,
+                "file": file_name,
+                "captured_at": labels.fr_date(document["metadata"]["extracted_at"]),
+                "note": labels.SAMPLE_TRUNCATED.format(count=sample_records) if cut else labels.SAMPLE_FULL,
+            }
+
+        root = (ann.response.root if ann.response else None) or (
+            ev.root_shape(sample.body) if sample is not None else TODO
+        )
+        response_rows = [_row("Élément racine", root), _row("Grain d'enregistrement", ann.record_grain)]
+        if ann.response and ann.response.nested:
+            response_rows.append(_row("Structures imbriquées", ann.response.nested))
+        per_page = ev.records_per_page(on_disk)
+        if per_page is not None:
+            response_rows.append(_row("Enregistrements par page (observé)", labels.fr_int(per_page)))
+        if sample_entry:
+            response_rows.append(_row("Charge utile d'exemple", f"fichier joint : {sample_entry['file']}"))
+
+        summary = [
+            _row("Méthode et chemin", f"{ep.method} {ep.path}"),
+            _row("Objet", ann.purpose),
+            _row("Appelé", called_text(ep, infos, planned)),
+        ]
+        if deps[name]:
+            summary.append(_row("Dépend de", ", ".join(sorted(deps[name]))))
+        summary.append(_row("Grain d'enregistrement", ann.record_grain))
+        if ann.auth_scope:
+            summary.append(_row("Portée d'authentification requise", ann.auth_scope))
+        if ann.expected_volume:
+            summary.append(_row("Volume attendu", ann.expected_volume))
+        if ann.vendor_ref:
+            summary.append(_row("Référence documentation éditeur", ann.vendor_ref))
+
+        example_params = _example_params(ep, plan.requests, sample)
+        key_template = annotation.landing_key(name)
+        rendered = render_key(key_template, source.source, name, example_params, extract_date=today)
+
+        endpoints.append(
+            {
+                "name": name,
+                "number": number,
+                "method": ep.method,
+                "path": ep.path,
+                "title": f"{ep.method} {ep.path} — {name}",
+                # Purpose and grain live in `summary` (and grain again in `response`),
+                # exactly as many times as the document shows them: completeness counts
+                # markers on the model, so the model carries no copy the document does not.
+                "depends_on": sorted(deps[name]),
+                "dependents": dependents[name],
+                "summary": summary,
+                "params": param_rows(ep, infos),
+                "correlated_origins": correlated_origins(ep, infos),
+                "pagination": pagination_rows(ep) or None,
+                "iteration_title": "Pagination et itération" if ep.paginate else "Itération",
+                "iteration": iteration_lines(ep, infos) if (ep.paginate or ep.markers()) else None,
+                "response": response_rows,
+                "quirks": list(ann.quirks),
+                "mode": labels.MODE.get(ann.mode, ann.mode),
+                "rationale": ann.rationale,
+                "files": labels.FILES_PER["page" if ep.paginate else "request"],
+                "volume": {
+                    "planned": planned or None,
+                    "measured": measured,
+                    "records_per_page": per_page,
+                    "text": volume_text(ep, infos, planned),
+                    "measured_text": _measured_text(measured),
+                },
+                "landing_key": key_template,
+                "rendered_key": full_key(annotation, rendered),
+                "sample": sample_entry,
+                "plan_error": plan.error,
+            }
+        )
+
+    paged = [name for name in order if source.endpoints[name].paginate]
+    total = labels.plural(len(order), "endpoint")
+    pagination_sentence = (
+        labels.PAGINATION_SUMMARY.format(
+            total=total, paged=len(paged), plural="nt" if len(paged) > 1 else "", names=", ".join(paged)
+        )
+        if paged
+        else labels.PAGINATION_NONE.format(total=total)
+    )
+
+    status = labels.STATUS[annotation.spec.status]
+    version_text = f"{annotation.spec.version} — {status}"
+    history = [
+        {
+            "version": entry.version,
+            "date": entry.date,
+            "author": entry.author,
+            "summary": entry.summary,
+        }
+        for entry in annotation.spec.history
+    ] or [
+        {
+            "version": annotation.spec.version,
+            "date": annotation.spec.date,
+            "author": annotation.spec.author,
+            "summary": labels.INITIAL_VERSION,
+        }
+    ]
+    workbook_file = WORKBOOK_FILE.format(source=source.source)
+    cover = [
+        _row("Propriétaire du document", annotation.spec.owner),
+        _row("Auteur", annotation.spec.author),
+        _row("Version", version_text),
+        _row("Date", annotation.spec.date),
+    ]
+    if annotation.spec.reviewers:
+        cover.append(_row("Relecteurs", annotation.spec.reviewers))
+    cover.append(_row("Équipe d'implémentation", annotation.spec.implementation_team))
+    cover.append(_row("Classeur d'accompagnement", workbook_file))
+
+    example, example_endpoint = _landing_example(source, annotation, order, plans, evidence, infos, today)
+
+    model: dict[str, Any] = {
+        "schema": SCHEMA,
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": {"name": source.source, "base_url": source.base_url, "endpoints": names},
+        "document": {
+            "source_system": annotation.spec.source_system,
+            "version": annotation.spec.version,
+            "status": status,
+            "version_text": version_text,
+            "date": annotation.spec.date,
+            "title": "Spécification d'extraction de données API",
+            "subtitle": f"API {annotation.spec.source_system}  →  zone d'atterrissage S3",
+            "header": f"Spécification d'extraction API  |  {annotation.spec.source_system}  |  v{annotation.spec.version} {status}",
+            "cover": cover,
+            "history": history,
+            "file": DOCUMENT_FILE.format(source=source.source),
+        },
+        "definitions": [{"term": term, "definition": text} for term, text in annotation.definitions.items()],
+        "related": _related(annotation, infos, bool(samples)),
+        "environments": _environments(source, annotation),
+        "auth": _auth(source, annotation),
+        "endpoints": endpoints,
+        "flow": {
+            "pagination_sentence": pagination_sentence,
+            "tree": _tree(order, deps, dependents),
+            "sequence": [
+                {
+                    "step": str(i),
+                    "action": f"{source.endpoints[name].method} {source.endpoints[name].path}",
+                    "after": ", ".join(sorted(deps[name])),
+                    "files": labels.FILES_PER["page" if source.endpoints[name].paginate else "request"],
+                }
+                for i, name in enumerate(order, start=1)
+            ],
+            "lists": [
+                {
+                    "name": infos[name].short,
+                    "used_by": ", ".join(
+                        n for n in order if name in {r.marker.provider for r in source.endpoints[n].markers()}
+                    ),
+                    "rows": list_rows(source, infos[name]),
+                    "error": infos[name].error,
+                }
+                for name in source.providers
+            ],
+            "volumes": [
+                {"endpoint": e["name"], "requests": e["volume"]["text"], "measured": e["volume"]["measured_text"]}
+                for e in endpoints
+            ],
+        },
+        "landing": {
+            "contract": contract.rows(names),
+            "example": example,
+            "example_endpoint": example_endpoint,
+            "example_lines": json.dumps(example, ensure_ascii=False, indent=2).splitlines(),
+            "layout": _layout(annotation),
+            "key_template": annotation.landing.key,
+            "rendered_keys": [e["rendered_key"] for e in endpoints],
+            "overrides": [
+                {"endpoint": e["name"], "key": e["landing_key"]}
+                for e in endpoints
+                if e["landing_key"] != annotation.landing.key
+            ],
+        },
+        "appendix": {
+            "samples": [e["sample"] for e in endpoints if e["sample"]],
+            "workbook": {
+                "file": workbook_file,
+                "tabs": [
+                    {
+                        "key": key,
+                        "name": labels.TABS[key],
+                        "contents": labels.TAB_CONTENTS[key],
+                        "reader": labels.TAB_READERS[key],
+                    }
+                    for key in _tab_keys(evidence)
+                ],
+            },
+        },
+        "evidence": {
+            "manifest": evidence.run_id,
+            "envelopes": {name: len(evidence.for_endpoint(name)) for name in order},
+            "fields": {name: ev.field_inventory(evidence.for_endpoint(name)) for name in order},
+        },
+    }
+    model["completeness"] = completeness(model, annotation, order)
+    return Built(model=model, samples=samples)
+
+
+def _measured_text(measured: Mapping[str, Any] | None) -> str | None:
+    if measured is None:
+        return None
+    parts = [labels.plural(measured["requests"], "requête"), labels.plural(measured["written"], "fichier")]
+    if measured["pages_max"] > 1:
+        parts.append(f"{labels.fr_int(measured['pages_max'])} pages au plus par séquence")
+    return ", ".join(parts)
+
+
+def _example_params(ep: Endpoint, requests: Sequence[RequestSpec], sample) -> dict[str, Any]:
+    if sample is not None:
+        return dict((sample.envelope.get("metadata") or {}).get("params") or {})
+    if requests:
+        return dict(requests[0].params)
+    return {name: f"<{name}>" for name in sorted(endpoint_params(ep))}
+
+
+def _landing_example(source, annotation, order, plans, evidence, infos, today) -> tuple[dict[str, Any], str]:
+    """§6.4, produced by `envelope.build()` so it cannot disagree with the contract.
+
+    A real envelope is preferred when the run left one; otherwise a synthetic request is
+    built from the plan. Parents are shown as landing keys, since that is what the
+    external pipeline will write there.
+    """
+    chosen = max(order, key=lambda name: (len(endpoint_params(source.endpoints[name])), order.index(name)))
+    sample = ev.sample_for(evidence, chosen)
+    if sample is not None:
+        example = {"metadata": json.loads(json.dumps(sample.envelope["metadata"])), "body": EXAMPLE_BODY}
+    else:
+        ep = source.endpoints[chosen]
+        specs = plans[chosen].requests
+        spec = specs[0] if specs else RequestSpec(
+            source=source.source,
+            endpoint=chosen,
+            method=ep.method,
+            path=binding.render(ep.path, {name: f"<{name}>" for name in placeholders(ep.path)}),
+            query=binding.fill_markers(ep.query, None, _placeholder_params(ep)),
+            payload=binding.fill_markers(ep.payload, None, _placeholder_params(ep)),
+            params=_placeholder_params(ep),
+            parents=(),
+            output_template=source.output_template(chosen),
+        )
+        auth_names = _auth_header_names(source)
+        headers = {**{k: v for k, v in source.defaults.headers.items()}, **{name: "secret" for name in auth_names}}
+        request = Request(
+            method=spec.method,
+            url=f"{source.base_url.rstrip('/')}/{spec.path.lstrip('/')}",
+            query=spec.query,
+            payload=spec.payload,
+            headers=headers,
+        )
+        if ep.paginate is not None:
+            request = pagination.with_cursor(request, ep.paginate, ep.paginate.start)
+        response = Response(status=200, headers={}, elapsed_ms=0, text="{}", body=EXAMPLE_BODY)
+        example = envelope.build(
+            spec=spec,
+            request=request,
+            response=response,
+            base_url=source.base_url,
+            extracted_at=f"{today}T02:04:19Z",
+            auth_headers=auth_names,
+        )
+    example["metadata"]["parents"] = [
+        _parent_key(parent, source, annotation, evidence, today) for parent in example["metadata"]["parents"]
+    ]
+    return example, chosen
+
+
+def _placeholder_params(ep: Endpoint) -> dict[str, str]:
+    return {name: f"<{name}>" for name in sorted(endpoint_params(ep))}
+
+
+def _parent_key(parent: str, source, annotation, evidence, today) -> str:
+    """A parent's local path, shown as the landing key that file would have.
+
+    The page is read back off the parent's request, where the cursor sits verbatim: that
+    is the whole argument for not carrying a separate page number.
+    """
+    for name in source.endpoints:
+        ep = source.endpoints[name]
+        for saved in evidence.for_endpoint(name):
+            if Path(saved.path) == Path(parent):
+                metadata = saved.envelope.get("metadata") or {}
+                page = _page_of(metadata.get("request") or {}, ep) if ep.paginate else 0
+                return render_key(
+                    annotation.landing_key(name),
+                    source.source,
+                    name,
+                    metadata.get("params") or {},
+                    extract_date=today,
+                    page=page,
+                )
+    return parent
+
+
+def _page_of(request: Mapping[str, Any], ep: Endpoint) -> int:
+    assert ep.paginate is not None
+    node: Any = request.get(ep.paginate.at_root)
+    for key in ep.paginate.at_keys:
+        if not isinstance(node, Mapping):
+            return 0
+        node = node.get(key)
+    return node - ep.paginate.start if isinstance(node, int) else 0
+
+
+def _auth_header_names(source: Source) -> list[str]:
+    """Header *names* the auth layer sets, by construction; values are never read."""
+    auth = source.auth
+    if auth is None:
+        return []
+    if auth.type == "basic":
+        return ["Authorization"]
+    if auth.type == "header":
+        return list(auth.headers)
+    return [auth.apply.header]
+
+
+def _auth(source: Source, annotation: Annotation) -> dict[str, Any]:
+    auth = source.auth
+    rows = [
+        _row("Mécanisme", labels.AUTH[auth.type] if auth is not None else "Aucune authentification"),
+        _row("Stockage des secrets", annotation.secrets),
+    ]
+    headers = [
+        {"name": name, "value": value, "required": labels.yes_no(True), "scope": "Toutes les requêtes"}
+        for name, value in source.defaults.headers.items()
+    ]
+    for name in _auth_header_names(source):
+        headers.append(
+            {"name": name, "value": f"<créance> ({REDACTED} dans les fichiers déposés)", "required": labels.yes_no(True), "scope": "Authentification"}
+        )
+    return {"rows": rows, "headers": headers}
+
+
+def _environments(source: Source, annotation: Annotation) -> list[dict[str, str]]:
+    rows = [{"name": labels.PRODUCTION, "base_url": source.base_url, "notes": labels.PRODUCTION_PURPOSE}]
+    for name, env in annotation.environments.items():
+        rows.append({"name": name.upper(), "base_url": env.base_url, "notes": env.notes or ""})
+    return rows
+
+
+def _related(annotation: Annotation, infos: Mapping[str, ProviderInfo], has_samples: bool) -> list[dict[str, str]]:
+    rows = [_row("Documentation API de l'éditeur", annotation.spec.vendor_docs)]
+    if any(info.kind == STATIC for info in infos.values()):
+        rows.append(_row("Référentiels des listes de paramètres", "fichiers joints — voir §4.3"))
+    if has_samples:
+        rows.append(_row("Charges utiles d'exemple", "fichiers joints — voir annexe A"))
+    return rows
+
+
+def _tree(order: list[str], deps, dependents) -> list[str]:
+    roots = [name for name in order if not deps[name]]
+    roots.sort(key=lambda name: (-len(dependents[name]), name))
+    lines = []
+    for root in roots:
+        lines.append(f"{root}{'   (pilote)' if dependents[root] else ''}")
+        for j, child in enumerate(dependents[root]):
+            lines.append(f"  {'└──' if j == len(dependents[root]) - 1 else '├──'} {child}")
+    return lines
+
+
+def _layout(annotation: Annotation) -> list[dict[str, str]]:
+    rows = [_row("Bucket", annotation.landing.bucket)]
+    if annotation.landing.prefix:
+        rows.append(_row("Préfixe", annotation.landing.prefix))
+    rows.append(_row("Format", "JSON, UTF-8, un document par fichier"))
+    if annotation.landing.encryption:
+        rows.append(_row("Chiffrement", annotation.landing.encryption))
+    return rows
+
+
+def _tab_keys(evidence: ev.Evidence) -> list[str]:
+    keys = ["readme", "endpoints", "metadata", "volumes"]
+    if any(evidence.envelopes.values()):
+        keys.insert(2, "fields")
+    return keys
+
+
+# --- completeness -------------------------------------------------------------------
+
+
+STRUCTURAL_SPEC = ("owner", "author", "implementation_team", "vendor_docs")
+STRUCTURAL_ENDPOINT = ("purpose", "record_grain", "mode", "rationale")
+
+
+def completeness(model: Mapping[str, Any], annotation: Annotation, order: list[str]) -> dict[str, Any]:
+    """How much of the document is still `[À COMPLÉTER]`, counted on the model.
+
+    `todo` is every string in the model carrying the marker, so a derived placeholder (a
+    response shape with no sample to read it from) counts exactly as the document shows
+    it. `filled` is every structural slot that holds real text. The percentage is the
+    share of slots with an answer.
+    """
+    locations = sorted(loc for loc, text in _strings(model) if labels.is_todo(text))
+    filled = 0
+    for name in STRUCTURAL_SPEC:
+        filled += not labels.is_todo(getattr(annotation.spec, name))
+    filled += not labels.is_todo(annotation.landing.bucket)
+    for name in order:
+        ann = annotation.endpoint(name)
+        for field_name in STRUCTURAL_ENDPOINT:
+            filled += not labels.is_todo(getattr(ann, field_name))
+    root_rows = [
+        row["value"]
+        for endpoint in model["endpoints"]
+        for row in endpoint["response"]
+        if row["item"] == "Élément racine"
+    ]
+    filled += sum(not labels.is_todo(value) for value in root_rows)
+    todo = len(locations)
+    percent = round(100 * filled / (filled + todo), 1) if filled + todo else 100.0
+    return {"todo": todo, "filled": filled, "percent": percent, "locations": locations}
+
+
+def _strings(node: Any, loc: str = "") -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    if isinstance(node, str):
+        found.append((loc, node))
+    elif isinstance(node, Mapping):
+        for key, value in node.items():
+            found.extend(_strings(value, f"{loc}.{key}" if loc else str(key)))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found.extend(_strings(value, f"{loc}[{i}]"))
+    return found
+
+
+# --- what a template may reference --------------------------------------------------
+
+
+def variables(model: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """Every path a template tag may use, with an example value. Lists are shown once,
+    through their first item, as `path[]`."""
+    out: list[tuple[str, str]] = []
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                walk(value, f"{path}.{key}" if path else str(key))
+        elif isinstance(node, list):
+            if node and isinstance(node[0], Mapping | list):
+                walk(node[0], f"{path}[]")
+            else:
+                out.append((path, _example_text(node)))
+        else:
+            out.append((path, _example_text(node)))
+
+    walk(model, "")
+    return out
+
+
+def _example_text(value: Any, limit: int = 70) -> str:
+    text = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+    text = text.replace("\n", " ")
+    return text if len(text) <= limit else text[: limit - 1] + "…"

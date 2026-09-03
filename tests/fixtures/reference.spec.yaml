@@ -1,0 +1,68 @@
+# The suite's own annotation for tests/fixtures/reference.yaml, owned here for the same
+# reason that file is: config/specs/ belongs to whoever uses the tool.
+#
+# Names are deliberately not the ones config/specs/test.spec.yaml uses, so a test can
+# assert that nothing test-specific survives in the Word template.
+
+spec:
+  version: "0.3"
+  status: in_review
+  date: "04/09/2026"
+  source_system: Référence
+  owner: Équipe données
+  author: A. Testeur
+  implementation_team: "[À COMPLÉTER]"
+  vendor_docs: https://ref.example.com/docs
+  history:
+    - { version: "0.1", date: "01/09/2026", author: A. Testeur, summary: Version initiale }
+    - { version: "0.3", date: "04/09/2026", author: A. Testeur, summary: Contrat de métadonnées }
+
+secrets: Coffre de test
+
+landing:
+  bucket: bucket-de-test
+  prefix: raw
+  key: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"
+
+environments:
+  qa:
+    base_url: https://ref-qa.example.com/api
+    notes: Données figées au 01/01/2026.
+
+definitions:
+  Actif: Équipement physique au sens de l'éditeur.
+
+lists:
+  asset_types:
+    name: types d'actifs
+
+endpoints:
+  tenant_info:
+    purpose: Informations du tenant, une fois par exécution.
+    record_grain: Un enregistrement, le tenant.
+    mode: full
+    rationale: Volume négligeable.
+  alarms:
+    purpose: Alarmes actives par type d'actif.
+    record_grain: "[À COMPLÉTER — une ligne par alarme courante ?]"
+    mode: "[À COMPLÉTER]"
+    quirks:
+      - La réponse ne porte pas le type d'actif interrogé.
+      - "[À COMPLÉTER — fuseau des horodatages]"
+  assets:
+    purpose: Inventaire des actifs pour un type donné. Endpoint pilote.
+    record_grain: Un enregistrement par actif.
+    mode: full
+    rationale: Le référentiel est petit et change rarement.
+    response:
+      nested: "`id` est un objet { id, entityType }."
+    sample:
+      redact: ["$.data[*].owner"]
+  measures:
+    purpose: Mesures d'un actif.
+    record_grain: Un point de mesure par enregistrement.
+    mode: incremental
+    rationale: Les mesures s'accumulent.
+    auth_scope: lecture des télémesures
+    quirks:
+      - La réponse ne contient aucun identifiant d'actif.

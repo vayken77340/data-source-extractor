@@ -50,6 +50,77 @@ def reference_env(monkeypatch):
 
 
 @pytest.fixture
+def reference_source(reference_env):
+    from api_extractor.config.loader import load_source
+
+    return load_source(REFERENCE_SOURCE)
+
+
+# The suite's own annotation, for the specification generator under tools/specgen.
+REFERENCE_SPEC = FIXTURES / "reference.spec.yaml"
+
+
+@pytest.fixture
+def reference_annotation():
+    from specgen.annotation import load_annotation
+
+    return load_annotation(REFERENCE_SPEC)
+
+
+def build_envelope(
+    source,
+    endpoint: str,
+    params: dict,
+    body,
+    *,
+    status: int = 200,
+    page: int = 0,
+    parents: tuple[str, ...] = (),
+    extracted_at: str = "2026-09-04T10:12:03Z",
+) -> dict:
+    """An envelope exactly as the runner would write it, without a runner.
+
+    Built by `envelope.build()` so that anything asserting on envelope shape asserts on
+    the real thing; the request goes through the planner's templating and the pagination
+    cursor, the way a real one does.
+    """
+    from api_extractor.http import pagination
+    from api_extractor.http.client import Request, Response
+    from api_extractor.persist import envelope
+    from api_extractor.plan import binding
+
+    ep = source.endpoints[endpoint]
+    spec = binding.RequestSpec(
+        source=source.source,
+        endpoint=endpoint,
+        method=ep.method,
+        path=binding.render(ep.path, params),
+        query=binding.fill_markers(ep.query, None, params),
+        payload=binding.fill_markers(ep.payload, None, params),
+        params=dict(params),
+        parents=parents,
+        output_template=source.output_template(endpoint),
+    )
+    request = Request(
+        method=spec.method,
+        url=f"{source.base_url.rstrip('/')}/{spec.path.lstrip('/')}",
+        query=spec.query,
+        payload=spec.payload,
+        headers={"Accept": "application/json", "Authorization": "Basic secret"},
+    )
+    if ep.paginate is not None:
+        request = pagination.with_cursor(request, ep.paginate, ep.paginate.start + page)
+    response = Response(status=status, headers={}, elapsed_ms=1, text="", body=body)
+    return envelope.build(
+        spec=spec,
+        request=request,
+        response=response,
+        base_url=source.base_url,
+        extracted_at=extracted_at,
+    )
+
+
+@pytest.fixture
 def write_source(tmp_path: Path):
     """Write a source dict to a YAML file and return its path."""
 
