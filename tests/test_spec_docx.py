@@ -128,6 +128,91 @@ def test_render_writes_a_docx(built, tmp_path):
     assert zipfile.is_zipfile(out)
 
 
+# --- structure: a rendered value must never become markup ----------------------------
+
+W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def body_of(rendered: bytes):
+    from xml.etree import ElementTree as ET
+
+    return ET.fromstring(parts(rendered)["word/document.xml"]).find(f"{W}body")
+
+
+def test_sections_stay_at_body_level(built):
+    """The regression that made a 25-page document open as 3 crushed pages.
+
+    A model value holding `<créance>` was rendered into the XML unescaped, opened an
+    element, and swallowed every later section into one table cell. docxtpl's `fix_tables`
+    then repaired that into valid XML, so nothing raised and no tag was left behind — only
+    the shape of the body gave it away.
+    """
+    body = body_of(render_docx.render_bytes(TEMPLATE, built))
+    children = list(body)
+    assert len(children) > 100, "the document collapsed into a handful of body children"
+    assert len(body.findall(f"{W}tbl")) == len(list(body.iter(f"{W}tbl"))), "a table contains a table"
+    assert len(body.findall(f"{W}p")) == len(list(body.iter(f"{W}p"))) - _cell_paragraphs(body)
+
+
+def _cell_paragraphs(body) -> int:
+    return sum(len(list(cell.iter(f"{W}p"))) for table in body.findall(f"{W}tbl") for cell in table.iter(f"{W}tc"))
+
+
+def test_no_heading_is_swallowed_into_a_table(built):
+    body = body_of(render_docx.render_bytes(TEMPLATE, built))
+    in_cells = [
+        style.get(f"{W}val")
+        for table in body.findall(f"{W}tbl")
+        for style in table.iter(f"{W}pStyle")
+    ]
+    assert not [style for style in in_cells if style and style.startswith(("Heading", "Title"))]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "<créance> (secret)",
+        "clé & valeur",
+        "a < b et b > a",
+        "<w:tbl>",
+        "</w:p></w:tc></w:tr></w:tbl>",
+        'guillemets "doubles" et \'simples\'',
+    ],
+)
+def test_markup_in_a_model_value_is_text_not_structure(built, value):
+    """Placeholders like `<bucket>` and `<id>` make such values ordinary, and an
+    annotation is free prose — so escaping is the contract, not a special case."""
+    built["endpoints"][0]["summary"][1]["value"] = value
+    rendered = render_docx.render_bytes(TEMPLATE, built)
+    body = body_of(rendered)
+    assert len(body.findall(f"{W}tbl")) == len(list(body.iter(f"{W}tbl")))
+    text = "".join(TEXT_RE.findall(parts(rendered)["word/document.xml"]))
+    import html
+
+    assert value in html.unescape(text)
+
+
+def test_nesting_depth_counts_tables():
+    assert template.nesting_depth("<w:tbl></w:tbl><w:tbl></w:tbl>") == 1
+    assert template.nesting_depth("<w:tbl><w:tbl></w:tbl></w:tbl>") == 2
+    assert template.nesting_depth("") == 0
+
+
+def test_the_structural_guard_would_have_caught_the_original_bug(built, monkeypatch):
+    """Autoescape makes this unreachable through a model value, which is the point. The
+    guard stays because corruption of the body's shape is the only symptom this class of
+    bug has, whatever future change causes it."""
+    from jinja2 import StrictUndefined
+    from jinja2.sandbox import SandboxedEnvironment
+
+    monkeypatch.setattr(
+        render_docx, "jinja_environment", lambda: SandboxedEnvironment(undefined=StrictUndefined)
+    )
+    built["auth"]["headers"][0]["value"] = "<créance>"
+    findings = template.check(TEMPLATE, built)
+    assert any("nested tables" in message for _loc, message in findings), findings
+
+
 # --- edits that break it ------------------------------------------------------------
 
 

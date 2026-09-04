@@ -76,12 +76,25 @@ def tags(path: Path) -> list[tuple[str, str]]:
     return [(tag, text) for _part, text in paragraphs(path) for tag in TAG_RE.findall(text)]
 
 
+def nesting_depth(xml: str) -> int:
+    """How deeply tables are nested in a document part.
+
+    The structural canary. docxtpl repairs a document whose XML a rendered value broke,
+    so corruption does not raise — it silently moves everything after the break inside a
+    table cell. That shows up here and nowhere else.
+    """
+    depth = deepest = 0
+    for match in re.finditer(r"</?w:tbl>", xml):
+        depth += 1 if match.group(0) == "<w:tbl>" else -1
+        deepest = max(deepest, depth)
+    return deepest
+
+
 def check(path: Path, model: Mapping[str, Any], *, allow_partial: bool = False) -> list[tuple[str, str]]:
     """Every way an edit can break generation, in one pass. See the module docstring."""
-    from jinja2 import StrictUndefined, TemplateSyntaxError, UndefinedError
-    from jinja2.sandbox import SandboxedEnvironment
+    from jinja2 import TemplateSyntaxError, UndefinedError
 
-    from specgen.render_docx import render_bytes
+    from specgen.render_docx import jinja_environment, render_bytes
 
     loc = str(path)
     findings: list[tuple[str, str]] = []
@@ -92,7 +105,7 @@ def check(path: Path, model: Mapping[str, Any], *, allow_partial: bool = False) 
         if text.count("{{") != text.count("}}") or text.count("{%") != text.count("%}"):
             findings.append((loc, f"unbalanced tag in paragraph {_excerpt(text)!r} — retype the tag in one go"))
 
-    env = SandboxedEnvironment(undefined=StrictUndefined)
+    env = jinja_environment()
     try:
         rendered = render_bytes(path, model, env)
     except TemplateSyntaxError as exc:
@@ -115,6 +128,7 @@ def check(path: Path, model: Mapping[str, Any], *, allow_partial: bool = False) 
             if not pattern.search(joined):
                 findings.append((loc, f"the template no longer carries {what}; pass --allow-partial if that is intended"))
 
+    allowed = max(nesting_depth(part) for part in _parts(path.read_bytes()).values())
     with zipfile.ZipFile(io.BytesIO(rendered)) as archive:
         for name in archive.namelist():
             if XML_PARTS.match(name):
@@ -122,7 +136,22 @@ def check(path: Path, model: Mapping[str, Any], *, allow_partial: bool = False) 
                 text = "".join(TEXT_RE.findall(xml))
                 if "{{" in text or "{%" in text:
                     findings.append((loc, f"a tag survived rendering in {name}: {_excerpt(text[text.find('{'):])!r}"))
+                found = nesting_depth(xml)
+                if found > allowed:
+                    findings.append(
+                        (
+                            loc,
+                            f"rendering nested tables {found} deep in {name} where the template "
+                            f"nests {allowed} — a rendered value broke the document's XML and "
+                            f"everything after it is now inside a table",
+                        )
+                    )
     return findings
+
+
+def _parts(data: bytes) -> dict[str, str]:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return {n: archive.read(n).decode("utf-8") for n in archive.namelist() if XML_PARTS.match(n)}
 
 
 def _missing_name(message: str) -> str:
