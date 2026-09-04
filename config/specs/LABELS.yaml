@@ -80,7 +80,13 @@ auth:
   secrets: Stockage des secrets
   scope_all: Toutes les requêtes
   scope_auth: Authentification
-  credential_value: "<créance> ({redacted} dans les fichiers déposés)"
+  # What stands in for the secret inside a header's value. The wrapper around it — the
+  # `ApiKey ` of `ApiKey {value}` — is structure the implementing team must reproduce, so
+  # it is shown; only the secret itself is hidden. Angle brackets are this document's
+  # placeholder convention, as in <bucket>. Put ***REDACTED*** here instead if you would
+  # rather the cell match what a landed file shows.
+  secret_placeholder: "<secret>"
+  basic_value: "Basic <base64(identifiant:secret)>"
 
 related:
   vendor_docs: Documentation API de l'éditeur

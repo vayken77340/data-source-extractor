@@ -28,7 +28,6 @@ from api_extractor.config.models import Endpoint, FromMarker, Source, placeholde
 from api_extractor.config.validate import endpoint_params
 from api_extractor.http import pagination
 from api_extractor.http.client import Request, Response
-from api_extractor.logs import REDACTED
 from api_extractor.persist import envelope
 from api_extractor.plan import binding
 from api_extractor.plan.binding import RequestSpec
@@ -708,14 +707,28 @@ def _page_of(request: Mapping[str, Any], ep: Endpoint) -> int:
 
 def _auth_header_names(source: Source) -> list[str]:
     """Header *names* the auth layer sets, by construction; values are never read."""
+    return [name for name, _shape in _auth_header_shapes(source)]
+
+
+def _auth_header_shapes(source: Source) -> list[tuple[str, str]]:
+    """(name, the value's shape) for every header the auth layer sets.
+
+    The shape is the credential's *template* with the secret standing in — `ApiKey
+    <secret>` rather than a bare placeholder. That wrapper is structure the implementing
+    team has to reproduce byte for byte, and a document that hides it hides the wrong
+    half. It is safe to print by construction: a template may contain only `{value}` or
+    `{token}` (`models.check_secret_template` rejects anything else), so it never carries
+    a secret, and the secret itself is never read here at all.
+    """
     auth = source.auth
     if auth is None:
         return []
+    secret = str(L["auth.secret_placeholder"])
     if auth.type == "basic":
-        return ["Authorization"]
+        return [("Authorization", str(L["auth.basic_value"]))]
     if auth.type == "header":
-        return list(auth.headers)
-    return [auth.apply.header]
+        return [(name, value.template.format(value=secret)) for name, value in auth.headers.items()]
+    return [(auth.apply.header, auth.apply.template.format(token=secret))]
 
 
 def _auth(source: Source, annotation: Annotation) -> dict[str, Any]:
@@ -728,11 +741,11 @@ def _auth(source: Source, annotation: Annotation) -> dict[str, Any]:
         {"name": name, "value": value, "required": labels.yes_no(True), "scope": str(L["auth.scope_all"])}
         for name, value in source.defaults.headers.items()
     ]
-    for name in _auth_header_names(source):
+    for name, shape in _auth_header_shapes(source):
         headers.append(
             {
                 "name": name,
-                "value": L.fmt("auth.credential_value", redacted=REDACTED),
+                "value": shape,
                 "required": labels.yes_no(True),
                 "scope": str(L["auth.scope_auth"]),
             }

@@ -236,6 +236,61 @@ def test_parameter_lists_are_named_and_described_generically(built):
     assert rows(chained["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
 
 
+# --- auth ---------------------------------------------------------------------------
+
+
+def auth_headers(auth: dict) -> list[tuple[str, str]]:
+    source = Source.model_validate(
+        {
+            "source": "demo",
+            "base_url": "https://demo.example.com/v1",
+            "auth": auth,
+            "defaults": {"headers": {"Accept": "application/json"}},
+            "endpoints": {"e": {"method": "GET", "path": "/e"}},
+        }
+    )
+    built = model.build(source, annotation_for(source))
+    return [(h["name"], h["value"]) for h in built.model["auth"]["headers"]]
+
+
+@pytest.mark.parametrize(
+    "auth, expected",
+    [
+        (
+            {"type": "header", "headers": {"X-Authorization": {"value": "env:K", "template": "ApiKey {value}"}}},
+            [("X-Authorization", "ApiKey <secret>")],
+        ),
+        ({"type": "header", "headers": {"X-API-Key": "env:K"}}, [("X-API-Key", "<secret>")]),
+        ({"type": "bearer", "token": "env:T"}, [("Authorization", "Bearer <secret>")]),
+        (
+            {"type": "bearer", "token": "env:T", "apply": {"header": "X-Auth", "template": "Token {token}"}},
+            [("X-Auth", "Token <secret>")],
+        ),
+        ({"type": "basic", "username": "env:U", "password": "env:P"}, [("Authorization", "Basic <base64(identifiant:secret)>")]),
+    ],
+)
+def test_a_credential_header_shows_its_wrapper_and_hides_only_the_secret(auth, expected, monkeypatch):
+    """`ApiKey ` is structure the implementing team must reproduce; only the key is secret.
+
+    A template may contain nothing but `{value}` or `{token}` — the models reject anything
+    else — so printing it can never print a credential.
+    """
+    for name in ("K", "T", "U", "P"):
+        monkeypatch.setenv(name, "hunter2-hunter2")
+    assert auth_headers(auth)[-len(expected) :] == expected
+
+
+def test_default_headers_come_before_the_credential_ones(monkeypatch):
+    monkeypatch.setenv("K", "hunter2-hunter2")
+    headers = auth_headers({"type": "header", "headers": {"X-API-Key": "env:K"}})
+    assert headers[0] == ("Accept", "application/json")
+
+
+def test_no_secret_value_reaches_the_headers_table(monkeypatch):
+    monkeypatch.setenv("K", "hunter2-hunter2")
+    assert not any("hunter2" in value for _name, value in auth_headers({"type": "header", "headers": {"X-API-Key": "env:K"}}))
+
+
 # --- landing ------------------------------------------------------------------------
 
 
