@@ -341,6 +341,7 @@ by a test, so the document cannot describe metadata the code does not write.
 
 ```bash
 pip install -r requirements-docs.txt         # docxtpl; the extractor itself never needs it
+python tools/build_spec.py test --init       # start the annotation for a source that has none
 python tools/build_spec.py test --check      # every problem in one pass, writes nothing
 python tools/build_spec.py test              # output/_docs/test/: .docx, .xlsx, spec.json, samples/
 python tools/build_spec.py test --variables  # what a template tag may reference
@@ -354,6 +355,13 @@ Four inputs, assembled into one JSON model before anything is rendered:
 | `config/specs/<name>.spec.yaml` | what the YAML cannot know: purpose, record grain, quirks, where files land | you, in French |
 | `config/specs/TEMPLATE.docx` | the prose and layout, with Jinja tags where values go | you, in Word |
 | `output/` | measured volumes, response shapes, samples | a run |
+
+**Start the annotation with `--init`.** It reads the source and writes every endpoint in
+reading order, each with the marker in every slot and a comment saying what the YAML
+already knows (`POST /assets/search — drives measures; paginated`). What it writes passes
+every check and produces a complete document with nothing in it yet, which is the honest
+starting point. It never overwrites: run it again once a source has grown an endpoint and
+it prints just the fragment to paste.
 
 **The annotation never restates the source YAML.** Any field the generator can read
 elsewhere is an unknown key there. `[À COMPLÉTER]` is accepted anywhere a string is;

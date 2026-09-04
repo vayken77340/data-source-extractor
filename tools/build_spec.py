@@ -1,6 +1,7 @@
 """Generate the extraction specification for a source: a French .docx, its companion
 workbook, the sample files, and the model they were rendered from.
 
+    python tools/build_spec.py test --init           # start the annotation for a new source
     python tools/build_spec.py test                  # output/_docs/test/…
     python tools/build_spec.py test --check          # every problem in one pass, writes nothing
     python tools/build_spec.py test --model-only     # spec.json only; no Word library needed
@@ -35,7 +36,7 @@ from pydantic import ValidationError  # noqa: E402
 from api_extractor import providers  # noqa: E402
 from api_extractor.config.loader import load_source, source_path  # noqa: E402
 from api_extractor.config.validate import Issue, validate_source  # noqa: E402
-from specgen import check, evidence, model, template  # noqa: E402
+from specgen import check, evidence, model, scaffold, template  # noqa: E402
 from specgen.annotation import load_annotation, read_yaml, spec_path  # noqa: E402
 
 MODEL_FILE = "spec.json"
@@ -45,6 +46,7 @@ SAMPLES_DIR = "samples"
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("source", help="source name, e.g. test")
+    parser.add_argument("--init", action="store_true", help="write a starter annotation for this source")
     parser.add_argument("--check", action="store_true", help="run every check, write nothing")
     parser.add_argument("--model-only", action="store_true", help="write spec.json and the samples only")
     parser.add_argument("--variables", action="store_true", help="print the paths a template tag may use")
@@ -68,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     source = load_source(source_path(args.source))
 
     annotation_path = spec_path(args.source)
+    if args.init:
+        return _init(source, annotation_path)
+
     try:
         raw = read_yaml(annotation_path)
         annotation = load_annotation(annotation_path)
@@ -113,6 +118,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     out = args.out or Path("output") / "_docs" / args.source
+    try:
+        return _write_all(built, out, chosen, model_only=args.model_only)
+    except OSError as exc:
+        # The whole workflow is generate, open in Word, adjust, regenerate — so a file
+        # still open in Word is the ordinary case, not an exceptional one.
+        print(f"cannot write {getattr(exc, 'filename', None) or out}: {exc.strerror or exc}")
+        print("If that file is open in Word or Excel, close it and run again.")
+        return 1
+
+
+def _write_all(built, out: Path, chosen: Path | None, *, model_only: bool) -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / MODEL_FILE).write_text(json.dumps(built.model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"model    -> {out / MODEL_FILE}")
@@ -121,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"sample   -> {path}")
-    if args.model_only:
+    if model_only:
         return 0
 
     from specgen import render_xlsx
@@ -139,6 +155,35 @@ def main(argv: list[str] | None = None) -> int:
 
     document = render_docx.render(chosen, built.model, out / built.model["document"]["file"])
     print(f"document -> {document}")
+    return 0
+
+
+def _init(source, annotation_path: Path) -> int:
+    """Write a starter annotation, or say what an existing one is missing.
+
+    Never overwrites: the prose in an existing file is the whole value of it, and an
+    endpoint added to the source months later is a fragment to paste, not a reason to
+    start again.
+    """
+    if not annotation_path.is_file():
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
+        annotation_path.write_text(scaffold.build(source, source.source), encoding="utf-8")
+        print(f"wrote {annotation_path}")
+        print(f"fill it in, then: python tools/build_spec.py {source.source} --check")
+        return 0
+
+    print(f"{annotation_path} already exists and will not be overwritten.")
+    try:
+        annotation = load_annotation(annotation_path)
+    except ValidationError:
+        print("It does not parse; run without --init to see why.")
+        return 1
+    fragment = scaffold.missing(source, annotation)
+    if fragment is None:
+        print("Every endpoint of this source is annotated.")
+        return 0
+    print("")
+    print(fragment, end="")
     return 0
 
 

@@ -94,3 +94,95 @@ def test_yaml_round_trip(tmp_path):
     path = tmp_path / "x.spec.yaml"
     path.write_text(yaml.safe_dump(MINIMAL, allow_unicode=True), encoding="utf-8")
     assert load_annotation(path).secrets == "Coffre"
+
+
+# --- starting one from a source ------------------------------------------------------
+
+
+@pytest.fixture
+def scaffolded(reference_source, tmp_path):
+    from specgen import scaffold
+
+    path = tmp_path / "reference.spec.yaml"
+    path.write_text(scaffold.build(reference_source, "reference"), encoding="utf-8")
+    return path
+
+
+def test_a_scaffold_covers_every_endpoint_in_reading_order(scaffolded):
+    annotation = load_annotation(scaffolded)
+    assert list(annotation.endpoints) == ["assets", "alarms", "tenant_info", "measures"]
+
+
+def test_a_scaffold_passes_every_check(reference_source, scaffolded, reference_env):
+    """A starting point that fails its own checks would be worse than a blank page. In
+    particular its landing key must resolve, vary per request and vary per page, for any
+    source whatever its endpoints."""
+    from specgen import check, evidence, model
+
+    annotation = load_annotation(scaffolded)
+    report = check.run(
+        check.Context(
+            source=reference_source,
+            annotation=annotation,
+            annotation_raw=yaml.safe_load(scaffolded.read_text(encoding="utf-8")),
+            built=model.build(reference_source, annotation),
+            evidence=evidence.Evidence(),
+        )
+    )
+    assert report.ok, [str(issue) for issue in report.issues]
+
+
+def test_a_scaffold_answers_nothing_and_says_so(reference_source, scaffolded):
+    from specgen import model
+
+    annotation = load_annotation(scaffolded)
+    done = model.build(reference_source, annotation).model["completeness"]
+    assert (done["filled"], done["percent"]) == (0, 0.0)
+    assert done["todo"] > 20
+
+
+def test_a_scaffold_carries_what_the_source_already_knows(reference_source, scaffolded):
+    """Derived hints, so the person filling it in is not re-reading the YAML."""
+    text = scaffolded.read_text(encoding="utf-8")
+    assert "# POST /assets/search — drives measures; paginated" in text
+    assert "# GET /assets/{id}/measures — runs after assets" in text
+    assert "# GET /tenant/info — no parameters" in text
+    assert "asset_types" in text and "asset_ids" in text  # both providers offered under `lists`
+
+
+def test_optional_blocks_are_offered_commented_out(scaffolded):
+    """An absent optional produces no row, so a stub that became an empty section would
+    be worse than none — but the block still has to be discoverable."""
+    text = scaffolded.read_text(encoding="utf-8")
+    for block in ("definitions:", "environments:", "lists:", "quirks:"):
+        assert f"# {block}" in text or f"# {block}"[:14] in text
+    assert load_annotation(scaffolded).definitions == {}
+
+
+def test_missing_names_only_what_a_grown_source_lacks(reference_source, reference_annotation):
+    from specgen import scaffold
+
+    assert scaffold.missing(reference_source, reference_annotation) is None
+    del reference_annotation.endpoints["measures"]
+    fragment = scaffold.missing(reference_source, reference_annotation)
+    assert "measures:" in fragment and "assets:" not in fragment
+    assert "runs after assets" in fragment
+
+
+def test_init_never_overwrites_an_existing_annotation(reference_source, tmp_path, capsys):
+    """The prose in an existing file is the whole value of it."""
+    import importlib.util
+
+    from tests.conftest import REPO_ROOT
+
+    spec = importlib.util.spec_from_file_location("build_spec_under_test", REPO_ROOT / "tools" / "build_spec.py")
+    build_spec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build_spec)
+
+    path = tmp_path / "reference.spec.yaml"
+    assert build_spec._init(reference_source, path) == 0
+    written = path.read_text(encoding="utf-8")
+
+    assert build_spec._init(reference_source, path) == 0
+    assert path.read_text(encoding="utf-8") == written
+    assert "will not be overwritten" in capsys.readouterr().out
