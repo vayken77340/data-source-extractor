@@ -82,9 +82,9 @@ def test_endpoints_are_numbered_in_that_order(built):
 
 def test_request_rows_name_location_type_and_origin(built):
     assert endpoint(built, "alarms")["params"] == [
-        {"name": "pageSize", "location": "chaîne de requête", "type": "entier", "origin": "valeur fixe : 100"},
-        {"name": "searchStatus", "location": "chaîne de requête", "type": "chaîne", "origin": "valeur fixe : ACTIVE"},
-        {"name": "type", "location": "chaîne de requête", "type": "chaîne", "origin": "types d'actifs (2 valeurs)"},
+        {"name": "pageSize", "location": "chaîne de requête", "type": "long", "origin": "valeur fixe : 100"},
+        {"name": "searchStatus", "location": "chaîne de requête", "type": "string", "origin": "valeur fixe : ACTIVE"},
+        {"name": "type", "location": "chaîne de requête", "type": "string", "origin": "types d'actifs"},
     ]
 
 
@@ -94,7 +94,7 @@ def test_a_static_provider_without_a_name_is_described_by_its_fields():
         {"kinds": {"fn": "literal", "args": {"values": [{"kind": "x"}, {"kind": "y"}, {"kind": "z"}]}}},
     )
     built = model.build(source, annotation_for(source))
-    assert endpoint(built, "a")["params"][0]["origin"] == "kind du référentiel (3 valeurs)"
+    assert endpoint(built, "a")["params"][0]["origin"] == "kind du référentiel"
 
 
 def test_a_chained_origin_names_the_endpoint_it_reads_never_the_provider(built):
@@ -102,7 +102,7 @@ def test_a_chained_origin_names_the_endpoint_it_reads_never_the_provider(built):
     assert measures["params"][0] == {
         "name": "id",
         "location": "chemin",
-        "type": "chaîne",
+        "type": "string",
         "origin": "enregistrement retourné par POST /assets/search",
     }
     assert rows(measures["summary"], "Dépend de") == ["assets"]
@@ -140,7 +140,7 @@ def test_several_params_off_one_provider_get_the_stay_together_paragraph():
         {"rows": {"fn": "literal", "args": {"values": [{"x": 1, "y": 2}]}}},
     )
     (note,) = endpoint(model.build(source, annotation_for(source)), "a")["correlated_origins"]
-    assert note.startswith("Les paramètres issus de « x / y du référentiel (1 valeur) »")
+    assert note.startswith("Les paramètres issus de « x / y du référentiel »")
 
 
 def test_only_a_paginated_endpoint_has_pagination_rows(built):
@@ -187,30 +187,26 @@ def test_a_structural_absence_renders_the_marker(built):
 # --- volumes and calls --------------------------------------------------------------
 
 
-def test_planned_volumes_ignore_every_sampling_cap():
-    """The document describes the extraction, not this tool's sampling of it."""
+def test_called_names_the_pattern_never_a_count():
+    """A count is a fact about one environment; the pattern is a fact about the API."""
     values = [{"k": str(i)} for i in range(7)]
     source = inline(
         {
             "a": {"method": "GET", "path": "/a", "query": {"k": {"from": "ks"}}, "limit": 2},
-            "p": {"method": "GET", "path": "/p", "query": {"k": {"from": "ks"}}, "paginate": {"style": "page_number", "at": "query.page"}, "output": "o/{k}_{page}.json"},
             "one": {"method": "GET", "path": "/one"},
         },
         {"ks": {"fn": "literal", "args": {"values": values}}},
         limit=3,
     )
     built = model.build(source, annotation_for(source))
-    assert endpoint(built, "a")["volume"] == {"planned": 7, "measured": None, "records_per_page": None, "text": "7", "measured_text": None}
-    assert endpoint(built, "p")["volume"]["text"] == "7 × nombre de pages"
-    assert endpoint(built, "one")["volume"]["text"] == "1"
-    assert rows(endpoint(built, "a")["summary"], "Appelé") == ["7 fois par exécution — une par k du référentiel"]
+    assert rows(endpoint(built, "a")["summary"], "Appelé") == ["Une fois par k du référentiel"]
     assert rows(endpoint(built, "one")["summary"], "Appelé") == ["Une fois par exécution"]
+    assert "volume" not in endpoint(built, "a")
+    assert "7" not in json.dumps(endpoint(built, "a"), ensure_ascii=False)
 
 
-def test_a_chained_endpoint_without_evidence_reads_n(built):
+def test_a_chained_endpoint_is_called_once_per_parent_record(built):
     measures = endpoint(built, "measures")
-    assert measures["volume"]["planned"] is None
-    assert measures["volume"]["text"] == "N — un par enregistrement retourné par POST /assets/search, à mesurer sur une exécution réelle"
     assert rows(measures["summary"], "Appelé") == ["Une fois par enregistrement retourné par POST /assets/search"]
 
 
@@ -233,8 +229,8 @@ def test_the_dependency_tree_and_sequence(built):
 
 def test_parameter_lists_are_named_and_described_generically(built):
     lists = {entry["name"]: entry for entry in built.model["flow"]["lists"]}
-    assert lists["types d'actifs"]["used_by"] == "assets, alarms"
-    assert rows(lists["types d'actifs"]["rows"], "Origine") == ["référentiel joint à ce document (2 valeurs)"]
+    assert lists["types d'actifs"]["used_by"] == "utilisée par : assets, alarms"
+    assert rows(lists["types d'actifs"]["rows"], "Origine") == ["référentiel joint à ce document"]
     chained = lists["enregistrement retourné par POST /assets/search"]
     assert rows(chained["rows"], "Origine") == ["réponses de POST /assets/search déjà déposées"]
     assert rows(chained["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
@@ -305,24 +301,14 @@ def evidence(reference_source):
             build_envelope(source, "measures", {"id": "PUMP-1"}, {"temperature": [1, 2, 3, 4]}, parents=("output/reference/assets/PUMP_p0.json",)),
         )
     ]
-    records = [
-        {"run_id": "r", "endpoint": "assets", "params": {"assetType": "PUMP"}, "page": 0, "status": 200},
-        {"run_id": "r", "endpoint": "assets", "params": {"assetType": "PUMP"}, "page": 1, "status": 200},
-        {"run_id": "r", "endpoint": "assets", "params": {"assetType": "VALVE"}, "page": 0, "status": 200},
-        {"run_id": "r", "endpoint": "measures", "params": {"id": "PUMP-1"}, "page": 0, "status": "error", "error": "boom"},
-    ]
-    return ev.Evidence(envelopes={"assets": assets, "measures": measures}, records=records, run_id="r")
+    return ev.Evidence(envelopes={"assets": assets, "measures": measures})
 
 
-def test_evidence_plans_the_chained_endpoint_and_measures_the_rest(reference_source, reference_annotation, evidence):
+def test_evidence_never_turns_into_a_count(reference_source, reference_annotation, evidence):
     built = model.build(reference_source, reference_annotation, evidence, generated_at=GENERATED)
-    measures = endpoint(built, "measures")
-    assert measures["volume"]["planned"] == 3  # PUMP-1, PUMP-2, PUMP-3 read off the envelopes
-    assert rows(measures["summary"], "Appelé") == ["3 fois par exécution — une par enregistrement retourné par POST /assets/search"]
-    assets = endpoint(built, "assets")
-    assert assets["volume"]["measured"] == {"requests": 3, "written": 3, "failed": 0, "skipped": 0, "pages_max": 2, "distinct_params": 2}
-    assert assets["volume"]["measured_text"] == "3 requêtes, 3 fichiers, 2 pages au plus par séquence"
-    assert assets["volume"]["records_per_page"] == 2
+    text = json.dumps(built.model, ensure_ascii=False).lower()
+    assert "volum" not in text and " valeurs)" not in text
+    assert rows(endpoint(built, "assets")["summary"], "Appelé") == ["Une fois par types d'actifs"]
 
 
 def test_evidence_describes_the_response_shape_and_attaches_a_sample(reference_source, reference_annotation, evidence):
@@ -345,18 +331,20 @@ def test_the_landing_example_prefers_a_real_envelope_and_shows_parents_as_keys(r
     assert example["body"] == {"…": "la réponse de l'API pour cette page, verbatim"}
 
 
-def test_the_field_inventory_records_what_came_back(reference_source, reference_annotation, evidence):
+def test_response_fields_record_what_came_back_in_iceberg_types(reference_source, reference_annotation, evidence):
     built = model.build(reference_source, reference_annotation, evidence)
-    inventory = {row["path"]: row for row in built.model["evidence"]["fields"]["assets"]}
-    assert inventory["$.data[].id.id"]["types"] == "chaîne"
-    assert inventory["$.data[].id.id"]["example"] == "PUMP-1"
-    assert inventory["$.hasNext"]["types"] == "booléen"
-    assert inventory["$.data[].id"]["presence"] == pytest.approx(2 / 3)
-    assert [t["key"] for t in built.model["appendix"]["workbook"]["tabs"]] == ["readme", "endpoints", "fields", "metadata", "volumes"]
+    fields = {row["path"]: row for row in endpoint(built, "assets")["response_fields"]}
+    assert fields["$.data[].id.id"]["type"] == "string" and fields["$.data[].id.id"]["example"] == "PUMP-1"
+    assert fields["$.hasNext"]["type"] == "boolean" and fields["$.hasNext"]["nullable"] is False
+    assert fields["$.data[].id"]["presence"] == pytest.approx(2 / 3)
+    assert fields["$.data[].id"]["nullable"] is True  # absent from the empty VALVE page
+    assert endpoint(built, "tenant_info")["response_fields"] == []
 
 
-def test_without_evidence_the_workbook_has_no_field_inventory(built):
-    assert [t["key"] for t in built.model["appendix"]["workbook"]["tabs"]] == ["readme", "endpoints", "metadata", "volumes"]
+def test_the_workbook_has_one_response_sheet_per_endpoint(built):
+    tabs = built.model["appendix"]["workbook"]["tabs"]
+    assert [t["key"] for t in tabs] == ["readme", "endpoints", "metadata", "response:assets", "response:alarms", "response:tenant_info", "response:measures"]
+    assert [t["name"] for t in tabs] == ["Readme", "Endpoints", "Metadata", "assets", "alarms", "tenant_info", "measures"]
 
 
 # --- the document never mentions the tool ------------------------------------------
@@ -366,12 +354,12 @@ def test_the_model_never_mentions_this_repository(reference_source, reference_an
     """Decision 6 as a test: the reader builds their own pipeline and has never seen this repo."""
     built = model.build(reference_source, reference_annotation, evidence)
     text = json.dumps(built.model, ensure_ascii=False)
-    forbidden = ["config/", "input/", "output/{", "defaults.", "env:", "run_id", "max_pages", "rate_limit"]
+    forbidden = ["config/", "input/", "output/{", "defaults.", "env:", "run_id", "max_pages", "rate_limit", "volum"]
     forbidden += [entry.name for entry in registry.registered()]
     forbidden += list(reference_source.providers)
     forbidden += list(reference_env.values())
     for word in forbidden:
-        assert word not in text, word
+        assert word.lower() not in text.lower(), word
 
 
 def test_variables_lists_what_a_template_may_reference(built):
@@ -379,4 +367,4 @@ def test_variables_lists_what_a_template_may_reference(built):
     assert paths["document.source_system"] == "Référence"
     assert "endpoints[].params[].origin" in paths
     assert "landing.contract[].attribute" in paths
-    assert paths["appendix.workbook.tabs[].name"] == "Lisez-moi"
+    assert paths["appendix.workbook.tabs[].name"] == "Readme"

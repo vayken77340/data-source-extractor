@@ -1,12 +1,14 @@
-"""What a run left on disk: envelopes and the manifest, read as evidence.
+"""What a run left on disk: envelopes, read as evidence about response shapes.
 
 The extractor deliberately does no schema inference or profiling — bodies are written
 verbatim and what happens to them next is somebody else's layer. This is that layer. It
 reads output, never writes it, and everything it derives is *observed*: types seen, keys
-present, records counted. Nothing here is a promise about the API.
+present. Nothing here is a promise about the API, and nothing here counts volumes — how
+many rows an environment happens to hold is not a fact the receiving team can use.
 
 All of it is optional input to the model. With nothing on disk the document still
-builds; volumes read *N*, response shapes read `[À COMPLÉTER]`, and Annexe A is empty.
+builds; response shapes read `[À COMPLÉTER]`, the response sheets say so, and Annexe A is
+empty.
 """
 
 from __future__ import annotations
@@ -14,17 +16,16 @@ from __future__ import annotations
 import copy
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from jsonpath_ng.ext import parse as parse_jsonpath
 
 from api_extractor.config.models import Source
 from api_extractor.logs import REDACTED
-from api_extractor.persist import manifest
 from api_extractor.providers.registry import SavedOutput
-from api_extractor.runner import read_outputs, search_root
+from api_extractor.runner import read_outputs
 from specgen import labels
+from specgen.labels import L
 
 INVENTORY_MAX_DEPTH = 12
 
@@ -32,119 +33,51 @@ INVENTORY_MAX_DEPTH = 12
 @dataclass(frozen=True)
 class Evidence:
     envelopes: Mapping[str, list[SavedOutput]] = field(default_factory=dict)
-    records: list[dict[str, Any]] = field(default_factory=list)  # one manifest's lines
-    run_id: str | None = None
 
     def for_endpoint(self, name: str) -> list[SavedOutput]:
         return list(self.envelopes.get(name, ()))
 
     @property
     def empty(self) -> bool:
-        return not any(self.envelopes.values()) and not self.records
+        return not any(self.envelopes.values())
 
 
-def gather(source: Source, output_root: Path = Path("output"), run_id: str | None = None) -> Evidence:
-    """Everything on disk for this source: envelopes per endpoint, plus one manifest.
+def gather(source: Source) -> Evidence:
+    """Every envelope on disk for this source, per endpoint.
 
-    Envelopes are found the way the runner finds them — by output template and by their
-    own metadata — so a stray file is never mistaken for evidence. The manifest is the one
-    named, else the most recent one whose records belong to this source.
+    Found the way the runner finds them — by output template and by their own metadata —
+    so a stray file is never mistaken for evidence.
     """
-    envelopes = {name: read_outputs(source, name) for name in source.endpoints}
-    chosen = run_id or latest_run(source, output_root)
-    records = manifest.read(manifest.path_for(output_root, chosen)) if chosen else []
-    return Evidence(envelopes=envelopes, records=records, run_id=chosen)
-
-
-def latest_run(source: Source, output_root: Path) -> str | None:
-    """The newest manifest that belongs to this source, by name (ids sort by time).
-
-    Manifest records carry no source name, so membership is judged by what they do carry:
-    every endpoint is one of ours and every output path sits under one of our roots.
-    """
-    runs_dir = output_root / manifest.RUNS_DIR
-    if not runs_dir.is_dir():
-        return None
-    roots = {str(search_root(source, name)) for name in source.endpoints}
-    for path in sorted(runs_dir.glob("*.jsonl"), reverse=True):
-        records = manifest.read(path)
-        if records and all(_belongs(record, source, roots) for record in records):
-            return path.stem
-    return None
-
-
-def _belongs(record: Mapping[str, Any], source: Source, roots: set[str]) -> bool:
-    if record.get("endpoint") not in source.endpoints:
-        return False
-    output = record.get("output")
-    if output is None:
-        return True  # an unplanned endpoint has no path, and is still ours
-    return any(str(Path(output)).startswith(root) for root in roots)
-
-
-# --- volumes --------------------------------------------------------------------------
-
-
-def measured(evidence: Evidence, endpoint: str) -> dict[str, Any] | None:
-    """Counts off the manifest for one endpoint, or None when it recorded nothing."""
-    records = [r for r in evidence.records if r.get("endpoint") == endpoint and "params" in r]
-    if not records:
-        return None
-    statuses = [r.get("status") for r in records]
-    written = sum(1 for s in statuses if isinstance(s, int) and s < 400)
-    pages = [int(r.get("page", 0)) for r in records]
-    return {
-        "requests": len(records),
-        "written": written,
-        "failed": len(records) - written - sum(1 for s in statuses if s == "skipped"),
-        "skipped": sum(1 for s in statuses if s == "skipped"),
-        "pages_max": max(pages) + 1 if pages else 0,
-        "distinct_params": len({_params_key(r) for r in records}),
-    }
-
-
-def _params_key(record: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
-    return tuple(sorted((k, str(v)) for k, v in (record.get("params") or {}).items()))
-
-
-def records_per_page(envelopes: Iterable[SavedOutput]) -> int | None:
-    """The largest list a page carried, counted rather than inferred."""
-    counts = [_record_count(saved.body) for saved in envelopes]
-    counts = [c for c in counts if c is not None]
-    return max(counts) if counts else None
-
-
-def _record_count(body: Any) -> int | None:
-    if isinstance(body, list):
-        return len(body)
-    if isinstance(body, Mapping):
-        lists = [len(v) for v in body.values() if isinstance(v, list)]
-        return max(lists) if lists else None
-    return None
+    return Evidence(envelopes={name: read_outputs(source, name) for name in source.endpoints})
 
 
 # --- shapes ---------------------------------------------------------------------------
 
 
 def root_shape(body: Any) -> str:
-    """One line about the top of a body: `objet (clés : data, hasNext)` or `liste de 12`."""
+    """One line about the top of a body: `objet (clés : data, hasNext)` or `liste de 12 éléments`."""
     if isinstance(body, Mapping):
-        return labels.ROOT_OBJECT.format(keys=", ".join(body) or "—")
+        if not body:
+            return str(L["endpoint.root_shape.object_empty"])
+        return L.fmt("endpoint.root_shape.object", keys=", ".join(body))
     if isinstance(body, list):
-        return labels.ROOT_LIST.format(count=labels.plural(len(body), "élément"))
-    return labels.ROOT_SCALAR.format(type=labels.type_of(body))
+        return L.fmt("endpoint.root_shape.list", count=labels.plural(len(body), L["endpoint.root_shape.item"]))
+    return L.fmt("endpoint.root_shape.scalar", type=labels.iceberg(body))
 
 
 def field_inventory(envelopes: Iterable[SavedOutput]) -> list[dict[str, Any]]:
-    """One row per JSON path seen in the bodies: observed types, presence, an example.
+    """One row per JSON path seen in the bodies: Iceberg types observed, whether it can
+    be absent or null, the share of responses carrying it, and an example.
 
-    Presence is the share of envelopes in which the path appeared at least once. List
-    items are written `[]`, so `$.data[].id.id` covers every element rather than one. This
-    records what came back; it prescribes nothing.
+    List items are written `[]`, so `$.data[].id.id` covers every element rather than
+    one. `nullable` is true when the path was ever null, or ever missing from a response
+    that had a body. This records what came back; it prescribes nothing.
     """
     seen: dict[str, dict[str, Any]] = {}
     total = 0
     for saved in envelopes:
+        if saved.body is None:
+            continue  # a non-JSON response has no structure to record
         total += 1
         present: set[str] = set()
         _walk_body(saved.body, "$", seen, present, 0)
@@ -153,10 +86,12 @@ def field_inventory(envelopes: Iterable[SavedOutput]) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(seen):
         entry = seen[path]
+        types = sorted(entry["types"] - {"null"})
         rows.append(
             {
                 "path": path,
-                "types": ", ".join(sorted(entry["types"])),
+                "type": ", ".join(str(L[f"types.json.{t}"]) for t in types) or str(L["types.json.null"]),
+                "nullable": "null" in entry["types"] or entry["envelopes"] < total,
                 "presence": entry["envelopes"] / total if total else 0.0,
                 "example": entry["example"],
             }
@@ -168,7 +103,7 @@ def _walk_body(node: Any, path: str, seen: dict, present: set[str], depth: int) 
     if depth > INVENTORY_MAX_DEPTH:
         return
     entry = seen.setdefault(path, {"types": set(), "envelopes": 0, "example": None})
-    entry["types"].add(labels.type_of(node))
+    entry["types"].add(labels.json_type(node))
     present.add(path)
     if entry["example"] is None and not isinstance(node, Mapping | list) and node is not None:
         entry["example"] = _short(node)

@@ -9,8 +9,9 @@ workbook, the sample files, and the model they were rendered from.
 
 Four inputs: `config/sources/<name>.yaml`, `config/specs/<name>.spec.yaml`, the Word
 template (`config/specs/TEMPLATE.docx`, or `<name>.template.docx`, or `--template`), and
-whatever a run left under `output/`. Nothing is rendered until the model is built and
-checked; a failing check writes nothing and exits 1.
+whatever a run left under `output/`. Every phrase, sheet name, column header and type
+name the generator writes comes from `config/specs/LABELS.yaml`. Nothing is rendered
+until the model is built and checked; a failing check writes nothing and exits 1.
 
 Deliberately a script under `tools/` rather than a CLI subcommand: the extractor must
 never need a Word library to fetch JSON. `docxtpl` lives in `requirements-docs.txt`.
@@ -52,7 +53,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variables", action="store_true", help="print the paths a template tag may use")
     parser.add_argument("--template", type=Path, help="Word template to use instead of the default")
     parser.add_argument("--allow-partial", action="store_true", help="accept a template missing a required section")
-    parser.add_argument("--run-id", help="manifest to read volumes from (default: the latest of this source)")
     parser.add_argument("--min-complete", type=float, default=0.0, help="fail below this completion percentage")
     parser.add_argument("--sample-records", type=int, default=3, help="list items kept per list in a sample")
     parser.add_argument("-o", "--out", type=Path, help="output directory (default: output/_docs/<source>)")
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         _print_issues(f"{annotation_path}: {len(issues)} problem(s)", issues)
         return 1
 
-    found = evidence.gather(source, run_id=args.run_id)
+    found = evidence.gather(source)
     built = model.build(source, annotation, found, sample_records=args.sample_records)
 
     if args.variables:

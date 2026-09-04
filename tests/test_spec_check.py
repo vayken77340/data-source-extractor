@@ -119,10 +119,11 @@ def test_an_unset_env_var_is_reported_as_unscannable(reference_source, monkeypat
 
 
 def test_a_contract_entry_the_envelope_no_longer_writes(reference_source, monkeypatch):
-    extra = contract.Attribute("metadata.batch_id", "string", "yes", "…")
+    ctx = context(reference_source)  # built before the catalogue is tampered with
+    extra = contract.Attribute("metadata.batch_id", "string", "yes")
     monkeypatch.setattr(contract, "ATTRIBUTES", (*contract.ATTRIBUTES, extra))
     monkeypatch.setattr(contract, "DECLARED", contract.DECLARED | {extra.path})
-    found = failing(check.run(context(reference_source)))["spec.contract.matches_envelope"]
+    found = failing(check.run(ctx))["spec.contract.matches_envelope"]
     assert "contract: the contract describes 'metadata.batch_id', which the envelope no longer writes" in found
 
 
@@ -155,7 +156,7 @@ def test_an_unplannable_endpoint_is_noted_not_failed(reference_source, reference
     source.providers["asset_ids"].args["path"] = "$.data[*].id.id"  # unchanged, still fine
     source.providers["asset_types"].args["values"] = "not-a-list"  # `literal` will raise
     report = check.run(context(source, raw))
-    assert any("could not be planned" in line for line in report.notes)
+    assert any("could not resolve its parameters" in line for line in report.notes)
 
 
 def test_without_a_template_nothing_is_rendered_and_nothing_fails(reference_source):

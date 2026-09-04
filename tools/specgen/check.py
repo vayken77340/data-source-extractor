@@ -261,8 +261,8 @@ def _samples_current(ctx: Context) -> list[Finding]:
 @check("spec.completeness")
 def _completeness(ctx: Context) -> list[Finding]:
     for endpoint in ctx.built.model["endpoints"]:
-        if endpoint["plan_error"]:
-            note(f"volumes: {endpoint['name']} could not be planned ({endpoint['plan_error']}), so its count reads N")
+        if endpoint["provider_error"]:
+            note(f"providers: {endpoint['name']} could not resolve its parameters ({endpoint['provider_error']}); its example key uses placeholders")
     done = ctx.built.model["completeness"]
     note(f"completion: {done['filled']} slot(s) answered, {done['todo']} marker(s) left ({done['percent']}% complete)")
     for loc in done["locations"]:

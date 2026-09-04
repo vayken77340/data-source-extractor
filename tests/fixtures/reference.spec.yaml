@@ -41,7 +41,7 @@ endpoints:
     purpose: Informations du tenant, une fois par exécution.
     record_grain: Un enregistrement, le tenant.
     mode: full
-    rationale: Volume négligeable.
+    rationale: Réponse unique, sans paramètre de filtrage.
   alarms:
     purpose: Alarmes actives par type d'actif.
     record_grain: "[À COMPLÉTER — une ligne par alarme courante ?]"

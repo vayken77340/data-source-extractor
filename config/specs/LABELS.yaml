@@ -1,0 +1,292 @@
+# Every reader-facing string the specification generator *computes*, and the layout of the
+# companion workbook. Edit here, never in code: a sentence, a sheet name, a column header,
+# a type name — none of them is hard-coded.
+#
+# What is NOT here: the prose that never varies, which lives in TEMPLATE.docx where it is
+# edited in Word; and the facts about one API, which live in <source>.spec.yaml.
+#
+# Keys are English identifiers the code looks up. Values are what the reader sees. Strings
+# with `{name}` are format templates; keep the placeholders, reword the rest.
+
+marker: "[À COMPLÉTER]"
+
+enums:
+  status: { draft: brouillon, in_review: en revue, approved: approuvé }
+  mode: { full: complet, incremental: incrémental }
+  auth:
+    basic: "HTTP Basic — Authorization: Basic base64(identifiant:secret)"
+    bearer: "Jeton porteur — Authorization: Bearer <jeton>"
+    header: "En-tête(s) statique(s) de créance"
+    oauth_client_credentials: "OAuth2 client_credentials — jeton obtenu auprès du serveur d'autorisation"
+    login_token: "Échange identifiant/mot de passe contre un jeton"
+  # Where a parameter lands in the request.
+  location:
+    path: chemin
+    query: chaîne de requête
+    payload: corps de la requête
+    label: non transmis (sert au nommage du fichier)
+  cursor_root: { query: chaîne de requête, payload: corps de la requête }
+  # `yes` and `no` are quoted: bare, YAML reads them as booleans and the key vanishes.
+  mandatory: { "yes": Oui, post_only: POST seulement, non_json: Réponse non JSON seulement }
+  "yes": Oui
+  "no": Non
+
+# Type vocabulary: Iceberg names, so the modelling team reads one language everywhere —
+# the request tables, the metadata contract and the response sheets alike.
+types:
+  # JSON value observed -> Iceberg type
+  json:
+    boolean: boolean
+    integer: long
+    number: double
+    string: string
+    object: struct
+    array: list
+    "null": "null"
+  # Metadata contract attribute kind -> Iceberg type (see tools/specgen/contract.py)
+  contract:
+    string: string
+    object: struct
+    integer: int
+    list: list<string>
+    timestamp: timestamp
+    any: struct | list
+
+document:
+  title: Spécification d'extraction de données API
+  subtitle: "API {source_system}  →  zone d'atterrissage S3"
+  header: "Spécification d'extraction API  |  {source_system}  |  v{version} {status}"
+  file: "Spec_Extraction_API_{source}.docx"
+  workbook_file: "Spec_Extraction_API_{source}_Annexes.xlsx"
+  sample_file: "{endpoint}_exemple.json"
+  version_text: "{version} — {status}"
+  cover:
+    owner: Propriétaire du document
+    author: Auteur
+    version: Version
+    date: Date
+    reviewers: Relecteurs
+    team: Équipe d'implémentation
+    workbook: Classeur d'accompagnement
+  history_initial: Version initiale
+
+environments:
+  production: Production
+  production_purpose: Extraction en production
+
+auth:
+  mechanism: Mécanisme
+  none: Aucune authentification
+  secrets: Stockage des secrets
+  scope_all: Toutes les requêtes
+  scope_auth: Authentification
+  credential_value: "<créance> ({redacted} dans les fichiers déposés)"
+
+related:
+  vendor_docs: Documentation API de l'éditeur
+  referentials: Référentiels des listes de paramètres
+  referentials_value: "fichiers joints — voir §4.3"
+  samples: Charges utiles d'exemple
+  samples_value: "fichiers joints — voir annexe A"
+
+endpoint:
+  title: "{method} {path} — {name}"
+  summary:
+    method: Méthode et chemin
+    purpose: Objet
+    called: Appelé
+    depends_on: Dépend de
+    grain: Grain d'enregistrement
+    auth_scope: Portée d'authentification requise
+    vendor_ref: Référence documentation éditeur
+  called:
+    once: Une fois par exécution
+    per: "Une fois par {origins}"
+  fixed_value: "valeur fixe : {value}"
+  correlated: >-
+    Les paramètres issus de « {origin} » proviennent d'un même enregistrement et restent
+    solidaires. Ils ne doivent jamais être recombinés entre eux : un produit cartésien
+    produirait des requêtes dépourvues de sens.
+  iteration_title: { paginated: Pagination et itération, plain: Itération }
+  pagination:
+    carried_by: Pagination portée par
+    cursor: Emplacement du curseur
+    first_page: Index de première page
+    signal: Signal de continuation
+    signal_none: aucun
+    stops_when: La boucle s'arrête quand
+  stop:
+    empty: une page revient vide
+    flag: "le chemin JSON {path} est faux"
+    either: "{empty}, ou {flag}"
+  # The pseudocode a reader can implement. `{indent}` is four spaces inside a loop.
+  pseudocode:
+    for_each: "pour chaque {origins} :"
+    page_init: "{indent}page := {start}"
+    repeat: "{indent}répéter"
+    response: "{indent}    réponse := {method} {path}"
+    cursor: "{indent}                 {at} = page"
+    land_in_loop: "{indent}    déposer la réponse dans un fichier          (§6)"
+    next_page: "{indent}    page := page + 1"
+    until: "{indent}jusqu'à ce que {condition}"
+    request: "{indent}{method} {path}"
+    land: "{indent}déposer la réponse dans un fichier          (§6)"
+  response:
+    root: Élément racine
+    grain: Grain d'enregistrement
+    nested: Structures imbriquées
+    sample: Charge utile d'exemple
+    sample_value: "fichier joint : {file}"
+  root_shape:
+    object: "objet (clés : {keys})"
+    object_empty: objet vide
+    list: "liste de {count}"
+    item: élément
+    scalar: "{type}"
+  files: { page: un fichier par page, request: un fichier par requête }
+
+# How a parameter list is named and described (§4.3) — never by its provider's name.
+lists:
+  static: "{fields} du référentiel"
+  chained: "enregistrement retourné par {method} {path}"
+  chained_unknown: "enregistrement issu de {endpoint}"
+  default_field: valeur
+  origin: Origine
+  origin_static: référentiel joint à ce document
+  origin_chained: "réponses de {method} {path} déjà déposées"
+  attached: référentiel joint à ce document
+  referential: Référentiel
+  value_of: "Valeur « {field} »"
+  field_relative: "{path}   (relatif à l'enregistrement)"
+  fields: Champs de chaque enregistrement
+  meaning: Signification
+  used_by: "utilisée par : {names}"
+  # Provider args rendered under a readable label; any other arg keeps its own name.
+  args:
+    path: Chemin des enregistrements
+    columns: Colonnes retenues
+    join_on: Clé de rapprochement
+    select: Valeurs rattachées
+    separator: Séparateur
+    sheet: Feuille
+    file: Table de correspondance
+    values: Valeurs
+
+flow:
+  pagination_some: >-
+    Sur les {total} de cette source, {paged} pagine{plural} ({names}) ; les autres
+    répondent en une seule fois.
+  pagination_none: "Aucun des {total} de cette source ne pagine : chacun répond en une seule fois."
+  endpoint_word: endpoint
+  driver_suffix: "   (pilote)"
+
+landing:
+  layout:
+    bucket: Bucket
+    prefix: Préfixe
+    format: Format
+    format_value: JSON, UTF-8, un document par fichier
+    encryption: Chiffrement
+  example_body: "la réponse de l'API pour cette page, verbatim"
+  endpoint_names: "Nom logique de l'endpoint : {names}."
+  # §6.3, keyed by attribute path. Every path the envelope writes needs an entry here and
+  # every entry needs a path — tests/test_spec_contract.py enforces both directions.
+  contract:
+    metadata.source: Identifie l'API source.
+    metadata.endpoint: Nom logique de l'endpoint.
+    metadata.extracted_at: >-
+      Instant de réception de la réponse, en UTC (AAAA-MM-JJThh:mm:ssZ). Devient la
+      colonne _extracted_at en Bronze.
+    metadata.params: >-
+      Paramètres résolus ayant produit cette requête. Seul lien entre l'enregistrement et
+      ce qui l'a demandé — y compris les valeurs qui ne sont pas transmises à l'API.
+    metadata.request.method: GET, POST, …
+    metadata.request.base_url: >-
+      URL de base, telle qu'appelée, sans barre oblique finale. Distingue les
+      environnements.
+    metadata.request.path: >-
+      Chemin résolu, paramètres de chemin remplacés. base_url + path est l'URL appelée,
+      hors chaîne de requête.
+    metadata.request.query: >-
+      Paramètres de requête tels qu'envoyés, curseur de pagination compris. Objet vide
+      s'il n'y en a pas.
+    metadata.request.payload: >-
+      Corps tel qu'envoyé, curseur de pagination compris. null pour une requête sans
+      corps.
+    metadata.request.headers: >-
+      En-têtes envoyés. Toute créance est remplacée par ***REDACTED*** à l'écriture.
+    metadata.response.status: >-
+      Code HTTP. Une réponse en erreur est déposée, pas escamotée : c'est une information
+      sur l'API.
+    metadata.parents: >-
+      Identifiants, dans la zone de dépôt, des fichiers dont les paramètres de cette
+      requête proviennent. Liste vide pour un endpoint pilote.
+    body: >-
+      La réponse de l'API, verbatim : aucun renommage, aucune conversion, aucun
+      aplatissement. null si la réponse n'est pas du JSON.
+    body_raw: Texte brut de la réponse quand elle n'est pas du JSON. Absent sinon.
+
+samples:
+  truncated: "extrait : listes tronquées à {count} par liste"
+  full: réponse complète
+
+# The companion workbook. Sheet names are what the reader sees in Excel and what the
+# document's annex lists; the response sheets are named after the endpoint itself.
+workbook:
+  sheets:
+    readme:
+      name: Readme
+      contents: Légende, conventions, avancement
+      reader: Tous
+    endpoints:
+      name: Endpoints
+      contents: "Une ligne par endpoint : mécanique de requête, pagination, clé de dépôt"
+      reader: Ingénieurs d'ingestion
+    metadata:
+      name: Metadata
+      contents: Spécification normative des attributs de métadonnées
+      reader: Ingénieurs d'ingestion
+    response:
+      name: "{endpoint}"
+      contents: "Structure de la réponse de {endpoint} : chemins, types, présence"
+      reader: Équipe de modélisation (référence, pas un mapping)
+  readme:
+    columns: [Élément, Valeur]
+    rows:
+      document: Document
+      source_system: Système source
+      version: Version
+      date: Date
+      generated: Généré le
+      progress: Avancement
+      progress_value: "{percent} % — {count} restante(s)"
+      progress_unit: mention
+      convention: Convention
+      convention_value: "Une cellule vide signifie « sans objet », jamais « inconnu »."
+    tabs_title: Onglets
+    tabs_columns: [Onglet, Contenu, Lecteur principal]
+  endpoints:
+    columns:
+      name: Endpoint
+      method: Méthode
+      path: Chemin
+      purpose: Objet
+      depends_on: Dépend de
+      params: Paramètres
+      pagination: Pagination
+      files: Fichiers
+      mode: Mode
+      grain: Grain
+      key: Clé de dépôt (exemple)
+    param_cell: "{name} ({location}) ← {origin}"
+    pagination_cell: "{item} : {value}"
+  metadata:
+    columns: [Attribut, Type, Obligatoire, Description]
+  response:
+    columns:
+      path: Chemin JSON
+      type: Type
+      nullable: Nullable
+      presence: Présence
+      example: Exemple
+    empty: "Aucune réponse capturée pour cet endpoint — exécuter une extraction pour remplir cet onglet."

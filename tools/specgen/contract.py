@@ -1,14 +1,16 @@
 """The landing contract, attribute by attribute — what §6.3 of the document says.
 
-This catalogue is the *only* prose description of the envelope. It is verified against
+This catalogue is the *only* description of the envelope. It is verified against
 `envelope.build()` by `tests/test_spec_contract.py`: a key the envelope writes without an
 entry here fails, and an entry here that the envelope no longer writes fails. The Word
 template renders this catalogue and nothing else, so the document cannot describe a
 contract the code does not write — which is the class of drift this project exists to
 prevent.
 
-`type` and `mandatory` are keys into `labels.CONTRACT_TYPE` and `labels.MANDATORY`;
-`description` is document content.
+`type` and `mandatory` are keys into `types.contract` and `enums.mandatory` of the label
+file; the French description of each attribute lives there too, under `landing.contract`,
+keyed by path — and the same test checks that every path has one and every description
+names a path.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from specgen import labels
+from specgen.labels import L
 
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
@@ -28,91 +30,40 @@ class Attribute:
     path: str
     type: str
     mandatory: str
-    description: str
 
 
 ATTRIBUTES: tuple[Attribute, ...] = (
-    Attribute("metadata.source", "string", "yes", "Identifie l'API source."),
-    Attribute("metadata.endpoint", "string", "yes", "Nom logique de l'endpoint."),
-    Attribute(
-        "metadata.extracted_at",
-        "timestamp",
-        "yes",
-        "Instant de réception de la réponse, en UTC (AAAA-MM-JJThh:mm:ssZ). Devient la "
-        "colonne _extracted_at en Bronze.",
-    ),
-    Attribute(
-        "metadata.params",
-        "object",
-        "yes",
-        "Paramètres résolus ayant produit cette requête. Seul lien entre l'enregistrement "
-        "et ce qui l'a demandé — y compris les valeurs qui ne sont pas transmises à l'API.",
-    ),
-    Attribute("metadata.request.method", "string", "yes", "GET, POST, …"),
-    Attribute(
-        "metadata.request.base_url",
-        "string",
-        "yes",
-        "URL de base, telle qu'appelée, sans barre oblique finale. Distingue les "
-        "environnements.",
-    ),
-    Attribute(
-        "metadata.request.path",
-        "string",
-        "yes",
-        "Chemin résolu, paramètres de chemin remplacés. base_url + path est l'URL appelée, "
-        "hors chaîne de requête.",
-    ),
-    Attribute(
-        "metadata.request.query",
-        "object",
-        "yes",
-        "Paramètres de requête tels qu'envoyés, curseur de pagination compris. Objet vide "
-        "s'il n'y en a pas.",
-    ),
-    Attribute(
-        "metadata.request.payload",
-        "any",
-        "post_only",
-        "Corps tel qu'envoyé, curseur de pagination compris. null pour une requête sans "
-        "corps.",
-    ),
-    Attribute(
-        "metadata.request.headers",
-        "object",
-        "yes",
-        "En-têtes envoyés. Toute créance est remplacée par ***REDACTED*** à l'écriture.",
-    ),
-    Attribute(
-        "metadata.response.status",
-        "integer",
-        "yes",
-        "Code HTTP. Une réponse en erreur est déposée, pas escamotée : c'est une "
-        "information sur l'API.",
-    ),
-    Attribute(
-        "metadata.parents",
-        "list",
-        "yes",
-        "Identifiants, dans la zone de dépôt, des fichiers dont les paramètres de cette "
-        "requête proviennent. Liste vide pour un endpoint pilote.",
-    ),
-    Attribute(
-        "body",
-        "any",
-        "yes",
-        "La réponse de l'API, verbatim : aucun renommage, aucune conversion, aucun "
-        "aplatissement. null si la réponse n'est pas du JSON.",
-    ),
-    Attribute(
-        "body_raw",
-        "string",
-        "non_json",
-        "Texte brut de la réponse quand elle n'est pas du JSON. Absent sinon.",
-    ),
+    Attribute("metadata.source", "string", "yes"),
+    Attribute("metadata.endpoint", "string", "yes"),
+    Attribute("metadata.extracted_at", "timestamp", "yes"),
+    Attribute("metadata.params", "object", "yes"),
+    Attribute("metadata.request.method", "string", "yes"),
+    Attribute("metadata.request.base_url", "string", "yes"),
+    Attribute("metadata.request.path", "string", "yes"),
+    Attribute("metadata.request.query", "object", "yes"),
+    Attribute("metadata.request.payload", "any", "post_only"),
+    Attribute("metadata.request.headers", "object", "yes"),
+    Attribute("metadata.response.status", "integer", "yes"),
+    Attribute("metadata.parents", "list", "yes"),
+    Attribute("body", "any", "yes"),
+    Attribute("body_raw", "string", "non_json"),
 )
 
 DECLARED = frozenset(attribute.path for attribute in ATTRIBUTES)
+
+
+def description(path: str) -> str:
+    # Attribute paths contain dots, so this is a plain key into the section rather than
+    # a dotted lookup that would walk into `metadata` looking for `source`.
+    texts = L.section("landing.contract")
+    if path not in texts:
+        raise KeyError(f"landing.contract has no description for {path!r} in {L.path}")
+    return str(texts[path])
+
+
+def described() -> frozenset[str]:
+    """The paths the label file describes — compared against DECLARED by the tests."""
+    return frozenset(L.section("landing.contract"))
 
 
 def paths(envelope: Mapping[str, Any]) -> set[str]:
@@ -204,15 +155,15 @@ def rows(endpoint_names: list[str]) -> list[dict[str, str]]:
     """The catalogue as document rows, with the endpoint names folded into `endpoint`."""
     out = []
     for attribute in ATTRIBUTES:
-        description = attribute.description
+        text = description(attribute.path)
         if attribute.path == "metadata.endpoint":
-            description += " " + labels.ENDPOINT_NAMES.format(names=", ".join(endpoint_names))
+            text += " " + L.fmt("landing.endpoint_names", names=", ".join(endpoint_names))
         out.append(
             {
                 "attribute": attribute.path,
-                "type": labels.CONTRACT_TYPE[attribute.type],
-                "mandatory": labels.MANDATORY[attribute.mandatory],
-                "description": description,
+                "type": str(L[f"types.contract.{attribute.type}"]),
+                "mandatory": str(L[f"enums.mandatory.{attribute.mandatory}"]),
+                "description": text,
             }
         )
     return out

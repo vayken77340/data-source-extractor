@@ -1,8 +1,9 @@
 """Project the model into the companion workbook with openpyxl.
 
-Tab names come from the model (`appendix.workbook.tabs`), which the .docx also renders in
-Annexe C — so the two cannot disagree. Every number that is a number in the model is a
-number in the cell; text stays text. Nothing is computed here.
+Sheet names, column headers and every cell label come from the label file; the sheet list
+comes from the model (`appendix.workbook.tabs`), which the .docx also renders in its
+annex — so the two cannot disagree. One sheet per endpoint, named after the endpoint,
+holds the structure of its response as observed. Nothing is computed here.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from specgen import labels
-from specgen.model import variables
+from specgen.labels import L
 
 HEADER_FILL = PatternFill("solid", fgColor="EDEDED")
 WIDTH_MAX = 70
@@ -25,23 +26,30 @@ WIDTH_MAX = 70
 def render(model: Mapping[str, Any], out: Path) -> Path:
     workbook = Workbook()
     workbook.remove(workbook.active)
-    builders = {
-        "readme": _readme,
-        "endpoints": _endpoints,
-        "fields": _fields,
-        "metadata": _metadata,
-        "volumes": _volumes,
-    }
+    by_name = {endpoint["name"]: endpoint for endpoint in model["endpoints"]}
     for tab in model["appendix"]["workbook"]["tabs"]:
-        sheet = workbook.create_sheet(tab["name"])
-        builders[tab["key"]](sheet, model)
+        sheet = workbook.create_sheet(_sheet_title(tab["name"]))
+        key = tab["key"]
+        if key == "readme":
+            _readme(sheet, model)
+        elif key == "endpoints":
+            _endpoints(sheet, model)
+        elif key == "metadata":
+            _metadata(sheet, model)
+        elif key.startswith("response:"):
+            _response(sheet, by_name[key.split(":", 1)[1]])
     out.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(out)
     return out
 
 
+def _sheet_title(name: str) -> str:
+    """Excel caps a sheet name at 31 characters and forbids a few of them."""
+    cleaned = "".join("_" if c in '[]:*?/\\' else c for c in name)
+    return cleaned[:31]
+
+
 def _table(sheet, headers: Sequence[str], rows: Sequence[Sequence[Any]], start_row: int = 1) -> None:
-    sheet.append([])  # openpyxl appends after the last used row; keep our own cursor instead
     for column, header in enumerate(headers, start=1):
         cell = sheet.cell(row=start_row, column=column, value=header)
         cell.font = Font(bold=True)
@@ -57,97 +65,95 @@ def _table(sheet, headers: Sequence[str], rows: Sequence[Sequence[Any]], start_r
             (len(str(sheet.cell(row=r, column=column).value or "")) for r in range(start_row, start_row + len(rows) + 1)),
             default=10,
         )
-        sheet.column_dimensions[get_column_letter(column)].width = min(max(12, longest + 2), WIDTH_MAX)
+        current = sheet.column_dimensions[get_column_letter(column)].width or 0
+        sheet.column_dimensions[get_column_letter(column)].width = max(current, min(max(12, longest + 2), WIDTH_MAX))
 
 
 def _readme(sheet, model: Mapping[str, Any]) -> None:
     document = model["document"]
     done = model["completeness"]
+    rows = L.section("workbook.readme.rows")
     intro = [
-        ("Document", document["title"]),
-        ("Système source", document["source_system"]),
-        ("Version", document["version_text"]),
-        ("Date", document["date"]),
-        ("Généré le", labels.fr_date(model["generated_at"])),
-        ("Avancement", f"{labels.fr_decimal(done['percent'])} % — {labels.plural(done['todo'], 'mention')} « {labels.TODO} » restante(s)"),
-        ("Convention", "Une ligne vide ou absente signifie « sans objet », jamais « inconnu »."),
+        (rows["document"], document["title"]),
+        (rows["source_system"], document["source_system"]),
+        (rows["version"], document["version_text"]),
+        (rows["date"], document["date"]),
+        (rows["generated"], labels.fr_date(model["generated_at"])),
+        (
+            rows["progress"],
+            str(rows["progress_value"]).format(
+                percent=labels.fr_decimal(done["percent"]),
+                count=labels.plural(done["todo"], str(rows["progress_unit"])),
+            ),
+        ),
+        (rows["convention"], rows["convention_value"]),
     ]
-    _table(sheet, ["Élément", "Valeur"], intro)
+    _table(sheet, list(L["workbook.readme.columns"]), intro)
     start = len(intro) + 3
-    sheet.cell(row=start, column=1, value="Onglets").font = Font(bold=True)
+    sheet.cell(row=start, column=1, value=str(L["workbook.readme.tabs_title"])).font = Font(bold=True)
     tabs = [(tab["name"], tab["contents"], tab["reader"]) for tab in model["appendix"]["workbook"]["tabs"]]
-    _table(sheet, ["Onglet", "Contenu", "Lecteur principal"], tabs, start_row=start + 1)
-    start += len(tabs) + 3
-    sheet.cell(row=start, column=1, value="Vocabulaire du modèle (pour l'édition du gabarit Word)").font = Font(bold=True)
-    _table(sheet, ["Chemin", "Exemple"], variables(model), start_row=start + 1)
+    _table(sheet, list(L["workbook.readme.tabs_columns"]), tabs, start_row=start + 1)
 
 
 def _endpoints(sheet, model: Mapping[str, Any]) -> None:
+    columns = L.section("workbook.endpoints.columns")
     rows = []
     for endpoint in model["endpoints"]:
-        pagination = "; ".join(f"{row['item']} : {row['value']}" for row in (endpoint["pagination"] or []))
-        rows.append(
-            (
-                endpoint["number"],
-                endpoint["name"],
-                endpoint["method"],
-                endpoint["path"],
-                _summary_value(endpoint, "Objet"),
-                _summary_value(endpoint, "Appelé"),
-                ", ".join(endpoint["depends_on"]),
-                "; ".join(f"{p['name']} ({p['location']}) ← {p['origin']}" for p in endpoint["params"]),
-                pagination,
-                endpoint["files"],
-                endpoint["mode"],
-                _summary_value(endpoint, "Grain d'enregistrement"),
-                endpoint["rendered_key"],
-            )
+        pagination = "; ".join(
+            L.fmt("workbook.endpoints.pagination_cell", item=row["item"], value=row["value"])
+            for row in (endpoint["pagination"] or [])
         )
-    _table(
-        sheet,
-        ["N°", "Endpoint", "Méthode", "Chemin", "Objet", "Appelé", "Dépend de", "Paramètres", "Pagination", "Fichiers", "Mode", "Grain", "Clé de dépôt (exemple)"],
-        rows,
-    )
+        params = "; ".join(
+            L.fmt("workbook.endpoints.param_cell", name=p["name"], location=p["location"], origin=p["origin"])
+            for p in endpoint["params"]
+        )
+        rows.append(
+            {
+                "name": endpoint["name"],
+                "method": endpoint["method"],
+                "path": endpoint["path"],
+                "purpose": _summary_value(endpoint, L["endpoint.summary.purpose"]),
+                "depends_on": ", ".join(endpoint["depends_on"]),
+                "params": params,
+                "pagination": pagination,
+                "files": endpoint["files"],
+                "mode": endpoint["mode"],
+                "grain": _summary_value(endpoint, L["endpoint.summary.grain"]),
+                "key": endpoint["rendered_key"],
+            }
+        )
+    # The label file decides which columns exist and in what order.
+    _table(sheet, list(columns.values()), [[row[key] for key in columns] for row in rows])
 
 
 def _summary_value(endpoint: Mapping[str, Any], item: str) -> str:
     return next((row["value"] for row in endpoint["summary"] if row["item"] == item), "")
 
 
-def _fields(sheet, model: Mapping[str, Any]) -> None:
-    rows = [
-        (name, row["path"], row["types"], row["presence"], row["example"])
-        for name, inventory in model["evidence"]["fields"].items()
-        for row in inventory
-    ]
-    _table(sheet, ["Endpoint", "Chemin JSON", "Types observés", "Présence", "Exemple"], rows)
-    for r in range(2, len(rows) + 2):
-        sheet.cell(row=r, column=4).number_format = "0 %"
-
-
 def _metadata(sheet, model: Mapping[str, Any]) -> None:
     rows = [(a["attribute"], a["type"], a["mandatory"], a["description"]) for a in model["landing"]["contract"]]
-    _table(sheet, ["Attribut", "Type", "Obligatoire", "Description"], rows)
+    _table(sheet, list(L["workbook.metadata.columns"]), rows)
 
 
-def _volumes(sheet, model: Mapping[str, Any]) -> None:
-    rows = []
-    for endpoint in model["endpoints"]:
-        volume = endpoint["volume"]
-        measured = volume["measured"] or {}
-        rows.append(
-            (
-                endpoint["name"],
-                volume["text"],
-                volume["planned"],
-                measured.get("requests"),
-                measured.get("written"),
-                measured.get("pages_max"),
-                volume["records_per_page"],
-            )
-        )
-    _table(
-        sheet,
-        ["Endpoint", "Requêtes par exécution", "Planifié", "Mesuré : requêtes", "Mesuré : fichiers", "Mesuré : pages max", "Enregistrements par page (observé)"],
-        rows,
-    )
+def _response(sheet, endpoint: Mapping[str, Any]) -> None:
+    columns = L.section("workbook.response.columns")
+    fields = endpoint["response_fields"]
+    if not fields:
+        _table(sheet, list(columns.values()), [])
+        sheet.cell(row=2, column=1, value=str(L["workbook.response.empty"])).font = Font(italic=True)
+        return
+    rows = [
+        {
+            "path": row["path"],
+            "type": row["type"],
+            "nullable": labels.yes_no(row["nullable"]),
+            "presence": row["presence"],
+            "example": row["example"],
+        }
+        for row in fields
+    ]
+    _table(sheet, list(columns.values()), [[row[key] for key in columns] for row in rows])
+    if "presence" in columns:
+        column = list(columns).index("presence") + 1
+        for r in range(2, len(rows) + 2):
+            sheet.cell(row=r, column=column).number_format = "0 %"

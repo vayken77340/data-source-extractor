@@ -354,7 +354,19 @@ Four inputs, assembled into one JSON model before anything is rendered:
 | `config/sources/<name>.yaml` | the mechanical facts | you, already |
 | `config/specs/<name>.spec.yaml` | what the YAML cannot know: purpose, record grain, quirks, where files land | you, in French |
 | `config/specs/TEMPLATE.docx` | the prose and layout, with Jinja tags where values go | you, in Word |
-| `output/` | measured volumes, response shapes, samples | a run |
+| `output/` | response shapes, samples | a run |
+
+Every phrase, sheet name, column header and type name the generator writes on its own
+comes from `config/specs/LABELS.yaml` — nothing reader-facing is in code. Types are
+Iceberg names everywhere (`string`, `long`, `struct`, `list`), so the modelling team reads
+one vocabulary in the request tables, the metadata contract and the response sheets.
+Volumes are deliberately absent: how many rows one environment holds is not a fact the
+receiving team can use.
+
+The workbook has three fixed sheets — Readme, Endpoints, Metadata — and then one sheet
+per endpoint, named after it, describing the response body as observed: every JSON path,
+its type, whether it can be null or absent, how often it was present, an example. Run an
+extraction first or those sheets say so.
 
 **Start the annotation with `--init`.** It reads the source and writes every endpoint in
 reading order, each with the marker in every slot and a comment saying what the YAML

@@ -47,7 +47,7 @@ endpoints:
     purpose: "Renvoie les informations du tenant. Appelé une fois par exécution, sans paramétrage."
     record_grain: "[À COMPLÉTER]"
     mode: full
-    rationale: "Volume négligeable, aucun paramètre de filtrage disponible."
+    rationale: "Réponse unique, aucun paramètre de filtrage disponible."
 
   alarms:
     purpose: "Renvoie les alarmes actives, une requête par type d'actif."

@@ -31,6 +31,9 @@ from specgen.labels import TODO
 
 SPECS_ROOT = Path("config/specs")
 
+# Only the mode values are enumerated here; their French labels live in LABELS.yaml.
+MODES = ("full", "incremental")
+
 DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
 
 # Placeholders a landing key may use that are neither intrinsic to the extractor nor an
@@ -119,7 +122,6 @@ class EndpointAnnotation(_Base):
     auth_scope: str | None = None  # optional
     vendor_ref: str | None = None  # optional
     response: ResponseNote | None = None  # optional, partly derivable
-    expected_volume: str | None = None  # optional; measured or planned when absent
     key: str | None = None  # optional per-endpoint landing key override
     sample: Sample | None = None  # optional
 

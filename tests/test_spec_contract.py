@@ -7,7 +7,8 @@ actually writes, in both directions and by type.
 
 from __future__ import annotations
 
-from specgen import contract, labels, model
+from specgen import contract, model
+from specgen.labels import L
 
 
 def test_the_catalogue_describes_exactly_what_the_envelope_writes():
@@ -51,11 +52,16 @@ def test_type_matching_is_strict_about_booleans_and_timestamps():
     assert not contract.type_matches(stamp, "2026-09-04 10:12:03")
 
 
-def test_the_rows_carry_french_labels_and_every_attribute():
+def test_the_rows_carry_iceberg_types_and_every_attribute():
     rows = contract.rows(["a", "b"])
     assert [row["attribute"] for row in rows] == [a.path for a in contract.ATTRIBUTES]
-    assert {row["type"] for row in rows} <= set(labels.CONTRACT_TYPE.values())
-    assert {row["mandatory"] for row in rows} <= set(labels.MANDATORY.values())
+    assert {row["type"] for row in rows} <= set(L.section("types.contract").values())
+    assert {row["mandatory"] for row in rows} <= set(L.section("enums.mandatory").values())
+
+
+def test_the_label_file_describes_exactly_the_declared_attributes():
+    """A description without an attribute, or an attribute without one, both fail."""
+    assert contract.described() == contract.DECLARED
 
 
 def test_the_document_example_is_the_envelope_the_builder_writes(reference_source, reference_annotation):

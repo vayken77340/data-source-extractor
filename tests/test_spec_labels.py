@@ -1,18 +1,22 @@
-"""The French label catalogue: formatting, and one label for every enum the models accept.
+"""The label file: formatting helpers, and one entry for every enum the models accept.
 
 A missing label would render an English identifier into a French document — quietly.
+Everything reader-facing comes from `config/specs/LABELS.yaml`, so these tests pin the
+file to the code that reads it.
 """
 
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from typing import get_args
 
 import pytest
 
 from api_extractor.config.models import PAGINATE_ROOTS, Auth
 from specgen import contract, labels
-from specgen.annotation import EndpointAnnotation, SpecBlock
+from specgen.annotation import MODES, EndpointAnnotation, SpecBlock
+from specgen.labels import JSON_TYPES, L
 
 THIN = " "
 
@@ -45,12 +49,8 @@ def test_french_pluralises_from_two(count, expected):
     assert labels.plural(count, "valeur") == expected
 
 
-def test_an_invariable_plural_is_explicit():
-    assert labels.plural(7, "fois", "fois") == "7 fois"
-
-
-def test_yes_no():
-    assert (labels.yes_no(True), labels.yes_no(False)) == ("Oui", "Non")
+def test_yes_no_come_from_the_file():
+    assert (labels.yes_no(True), labels.yes_no(False)) == (L["enums.yes"], L["enums.no"])
 
 
 @pytest.mark.parametrize(
@@ -67,19 +67,20 @@ def test_a_marker_is_recognised_by_its_opening(value, expected):
     assert labels.is_todo(value) is expected
 
 
-def test_json_types_have_names():
-    assert [labels.type_of(v) for v in (1, "a", True, 1.5, {}, [], None)] == [
-        "entier",
-        "chaîne",
-        "booléen",
-        "décimal",
-        "objet",
-        "liste",
-        "nul",
+def test_json_values_get_iceberg_type_names():
+    """One type vocabulary for the whole document, and it is the modelling team's."""
+    assert [labels.iceberg(v) for v in (1, "a", True, 1.5, {}, [], None)] == [
+        "long",
+        "string",
+        "boolean",
+        "double",
+        "struct",
+        "list",
+        "null",
     ]
 
 
-# --- every enum has a label --------------------------------------------------------
+# --- the file covers what the code asks of it ---------------------------------------
 
 
 def literal_values(model, field: str) -> set[str]:
@@ -87,28 +88,50 @@ def literal_values(model, field: str) -> set[str]:
 
 
 def test_every_status_has_a_label():
-    assert set(labels.STATUS) == literal_values(SpecBlock, "status")
+    assert set(L.section("enums.status")) == literal_values(SpecBlock, "status")
 
 
 def test_every_mode_has_a_label():
-    assert set(labels.MODE) == literal_values(EndpointAnnotation, "mode") - {labels.TODO}
+    assert set(L.section("enums.mode")) == set(MODES) == literal_values(EndpointAnnotation, "mode") - {labels.TODO}
 
 
 def test_every_auth_type_has_a_label():
     union, _metadata = get_args(Auth)
     names = {get_args(member.model_fields["type"].annotation)[0] for member in get_args(union)}
-    assert set(labels.AUTH) == names
+    assert set(L.section("enums.auth")) == names
 
 
-def test_every_cursor_root_has_a_label():
-    assert set(labels.CURSOR_ROOT) == set(PAGINATE_ROOTS)
-    assert set(PAGINATE_ROOTS) <= set(labels.LOCATION)
+def test_every_cursor_root_and_location_has_a_label():
+    assert set(L.section("enums.cursor_root")) == set(PAGINATE_ROOTS)
+    assert set(L.section("enums.location")) == set(PAGINATE_ROOTS) | {"path", "label"}
+
+
+def test_every_json_type_maps_to_an_iceberg_type():
+    assert set(L.section("types.json")) == set(JSON_TYPES.values())
 
 
 def test_every_contract_type_and_mandatory_key_has_a_label():
-    assert {a.type for a in contract.ATTRIBUTES} <= set(labels.CONTRACT_TYPE)
-    assert {a.mandatory for a in contract.ATTRIBUTES} <= set(labels.MANDATORY)
+    assert {a.type for a in contract.ATTRIBUTES} <= set(L.section("types.contract"))
+    assert {a.mandatory for a in contract.ATTRIBUTES} <= set(L.section("enums.mandatory"))
 
 
-def test_workbook_tab_tables_agree():
-    assert set(labels.TABS) == set(labels.TAB_CONTENTS) == set(labels.TAB_READERS)
+def test_every_workbook_sheet_is_fully_described():
+    sheets = L.section("workbook.sheets")
+    assert set(sheets) == {"readme", "endpoints", "metadata", "response"}
+    for entry in sheets.values():
+        assert set(entry) == {"name", "contents", "reader"}
+
+
+def test_a_missing_key_names_the_file():
+    with pytest.raises(KeyError, match="LABELS.yaml"):
+        L["no.such.key"]
+
+
+def test_lookup_and_formatting(tmp_path):
+    path = tmp_path / "labels.yaml"
+    path.write_text("a:\n  b: 'x {n}'\n", encoding="utf-8")
+    loaded = labels.load(path)
+    assert loaded["a.b"] == "x {n}" and loaded.fmt("a.b", n=1) == "x 1"
+    assert loaded.get("a.zzz", "d") == "d"
+    with pytest.raises(FileNotFoundError):
+        labels.load(Path(tmp_path / "missing.yaml"))
