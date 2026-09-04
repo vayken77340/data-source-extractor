@@ -37,7 +37,7 @@ def render(model: Mapping[str, Any], out: Path) -> Path:
         elif key == "metadata":
             _metadata(sheet, model)
         elif key.startswith("response:"):
-            _response(sheet, by_name[key.split(":", 1)[1]])
+            _endpoint_sheet(sheet, by_name[key.split(":", 1)[1]])
     out.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(out)
     return out
@@ -88,7 +88,13 @@ def _readme(sheet, model: Mapping[str, Any]) -> None:
         ),
         (rows["convention"], rows["convention_value"]),
     ]
+    if model["links"]["document"]:
+        intro.insert(1, (rows["document_link"], document["file"]))
     _table(sheet, list(L["workbook.readme.columns"]), intro)
+    if model["links"]["document"]:
+        cell = sheet.cell(row=3, column=2)  # the row just inserted, under the header
+        cell.hyperlink = model["links"]["document"]
+        cell.font = Font(color="0563C1", underline="single")
     start = len(intro) + 3
     sheet.cell(row=start, column=1, value=str(L["workbook.readme.tabs_title"])).font = Font(bold=True)
     tabs = [(tab["name"], tab["contents"], tab["reader"]) for tab in model["appendix"]["workbook"]["tabs"]]
@@ -135,13 +141,35 @@ def _metadata(sheet, model: Mapping[str, Any]) -> None:
     _table(sheet, list(L["workbook.metadata.columns"]), rows)
 
 
-def _response(sheet, endpoint: Mapping[str, Any]) -> None:
+def _endpoint_sheet(sheet, endpoint: Mapping[str, Any]) -> None:
+    """One endpoint, both directions: what it sends above what it returns.
+
+    The document shows the request's *shape*; this is the field-by-field reference, and
+    putting it beside the response means one sheet answers everything about an endpoint.
+    """
+    sheet.cell(row=1, column=1, value=str(L["workbook.blocks.request"])).font = Font(bold=True)
+    end = _request(sheet, endpoint, start_row=2)
+    sheet.cell(row=end + 2, column=1, value=str(L["workbook.blocks.response"])).font = Font(bold=True)
+    _response(sheet, endpoint, start_row=end + 3)
+
+
+def _request(sheet, endpoint: Mapping[str, Any], start_row: int) -> int:
+    columns = L.section("workbook.request.columns")
+    rows = [[p[key] for key in columns] for p in endpoint["params"]]
+    _table(sheet, list(columns.values()), rows, start_row=start_row)
+    if not rows:
+        sheet.cell(row=start_row + 1, column=1, value=str(L["workbook.request.empty"])).font = Font(italic=True)
+        return start_row + 1
+    return start_row + len(rows)
+
+
+def _response(sheet, endpoint: Mapping[str, Any], start_row: int = 1) -> int:
     columns = L.section("workbook.response.columns")
     fields = endpoint["response_fields"]
     if not fields:
-        _table(sheet, list(columns.values()), [])
-        sheet.cell(row=2, column=1, value=str(L["workbook.response.empty"])).font = Font(italic=True)
-        return
+        _table(sheet, list(columns.values()), [], start_row=start_row)
+        sheet.cell(row=start_row + 1, column=1, value=str(L["workbook.response.empty"])).font = Font(italic=True)
+        return start_row + 1
     rows = [
         {
             "path": row["path"],
@@ -152,8 +180,9 @@ def _response(sheet, endpoint: Mapping[str, Any]) -> None:
         }
         for row in fields
     ]
-    _table(sheet, list(columns.values()), [[row[key] for key in columns] for row in rows])
+    _table(sheet, list(columns.values()), [[row[key] for key in columns] for row in rows], start_row=start_row)
     if "presence" in columns:
         column = list(columns).index("presence") + 1
-        for r in range(2, len(rows) + 2):
+        for r in range(start_row + 1, start_row + len(rows) + 1):
             sheet.cell(row=r, column=column).number_format = "0 %"
+    return start_row + len(rows)

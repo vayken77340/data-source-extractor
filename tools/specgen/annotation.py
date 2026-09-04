@@ -96,6 +96,21 @@ class Landing(_Base):
     encryption: str | None = None  # optional
 
 
+class Links(_Base):
+    """Where the delivered files end up, once they are somewhere.
+
+    Deliberately hand-written rather than derived: the generator writes files, it does not
+    publish them, and a SharePoint URL is only knowable after the upload. Every field is
+    optional and the marker counts as absent, so a pointer with no URL renders as the
+    plain text it is today and nothing breaks before the links exist.
+    """
+
+    workbook: str | None = None  # the companion .xlsx, once uploaded
+    document: str | None = None  # this specification, linked from the workbook
+    samples: str | None = None  # the folder holding the sample payloads
+    vendor: str | None = None  # the URL behind `spec.vendor_docs`
+
+
 class Environment(_Base):
     """Only the environments the source YAML does not describe: production is `base_url`."""
 
@@ -138,6 +153,7 @@ class Annotation(_Base):
     spec: SpecBlock
     secrets: str  # the vault's name and nothing else — the document circulates widely
     landing: Landing
+    links: Links = Field(default_factory=Links)
     environments: dict[str, Environment] = Field(default_factory=dict)
     definitions: dict[str, str] = Field(default_factory=dict)
     lists: dict[str, ListNote] = Field(default_factory=dict)

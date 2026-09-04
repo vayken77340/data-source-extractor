@@ -364,9 +364,42 @@ Volumes are deliberately absent: how many rows one environment holds is not a fa
 receiving team can use.
 
 The workbook has three fixed sheets — Readme, Endpoints, Metadata — and then one sheet
-per endpoint, named after it, describing the response body as observed: every JSON path,
-its type, whether it can be null or absent, how often it was present, an example. Run an
-extraction first or those sheets say so.
+per endpoint, named after it, holding both directions: the request's parameters above the
+response's fields. Response fields come from what a run observed, so run an extraction
+first or that block says so.
+
+**The document shows the request's shape, not a table of dotted paths.** A nested body is
+printed as a body, with each value's origin in a column beside it, because
+`pageLink.page` in a table hides the one thing a reader needs to see:
+
+```
+{
+  "pageLink": {
+    "pageSize": 100,   ← valeur fixe
+    "page": 0          ← curseur de pagination, incrémenté à chaque page
+  },
+  "assetType": "<assetType>"   ← types d'actifs
+}
+```
+
+The exhaustive parameter table lives in that endpoint's sheet, and the document points at
+it. So Word says what to send and why; the workbook is the field-by-field reference.
+
+**Links are yours to fill in.** The generator writes files, it does not publish them, so
+a SharePoint URL is only knowable after the upload. A `links` block in the annotation
+carries them:
+
+```yaml
+links:
+  workbook: https://contoso.sharepoint.com/.../Spec_Annexes.xlsx
+  document: https://contoso.sharepoint.com/.../Spec.docx
+  samples:  https://contoso.sharepoint.com/.../Samples/
+  vendor:   https://vendor.example.com/docs
+```
+
+Left as `[À COMPLÉTER]`, every pointer renders as the plain text it already was. Filled,
+they become real Word hyperlinks, and the workbook's Readme links back to the document so
+the pair is navigable both ways.
 
 **Start the annotation with `--init`.** It reads the source and writes every endpoint in
 reading order, each with the marker in every slot and a comment saying what the YAML

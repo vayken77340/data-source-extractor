@@ -277,6 +277,117 @@ def _marker_type(name: str, info: ProviderInfo | None) -> str:
         return str(L["types.json.string"])
 
 
+# --- the request as it goes on the wire ----------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Leaf:
+    """One value in a request, and where it comes from."""
+
+    text: str
+    note: str
+
+
+def _shape_node(node: Any, infos: Mapping[str, ProviderInfo], key: str | None = None) -> Any:
+    if isinstance(node, FromMarker):
+        name = node.alias or key or "?"
+        info = infos.get(node.provider)
+        return _Leaf(f'"<{name}>"', info.phrase if info else node.provider)
+    if isinstance(node, Mapping):
+        return {child: _shape_node(value, infos, child) for child, value in node.items()}
+    if isinstance(node, list):
+        return [_shape_node(value, infos, key) for value in node]
+    return _Leaf(json.dumps(node, ensure_ascii=False), str(L["endpoint.shape.fixed"]))
+
+
+def _json_lines(node: Any, indent: int = 0, suffix: str = "") -> list[tuple[str, str]]:
+    """A JSON skeleton as (text, note) pairs, one per line.
+
+    A key and the opening brace of its value share a line, the way JSON is read, so
+    `"pageLink": {` stays whole and its children sit visibly inside it.
+    """
+    pad = "  " * indent
+    if isinstance(node, _Leaf):
+        return [(f"{pad}{node.text}{suffix}", node.note)]
+    if isinstance(node, Mapping):
+        if not node:
+            return [(f"{pad}{{}}{suffix}", "")]
+        lines = [(f"{pad}{{", "")]
+        items = list(node.items())
+        for position, (key, value) in enumerate(items):
+            tail = "," if position < len(items) - 1 else ""
+            inner = _json_lines(value, indent + 1, tail)
+            first, note = inner[0]
+            lines.append((f'{"  " * (indent + 1)}"{key}": {first.lstrip()}', note))
+            lines.extend(inner[1:])
+        lines.append((f"{pad}}}{suffix}", ""))
+        return lines
+    if isinstance(node, list):
+        if not node:
+            return [(f"{pad}[]{suffix}", "")]
+        lines = [(f"{pad}[", "")]
+        for position, value in enumerate(node):
+            tail = "," if position < len(node) - 1 else ""
+            lines.extend(_json_lines(value, indent + 1, tail))
+        lines.append((f"{pad}]{suffix}", ""))
+        return lines
+    return [(f"{pad}{node}{suffix}", "")]  # pragma: no cover - every shape is covered above
+
+
+def _aligned(pairs: Sequence[tuple[str, str]]) -> list[str]:
+    """Put every note in one column, so the origins read as a column and not as clutter."""
+    width = max((len(text) for text, note in pairs if note), default=0)
+    arrow = str(L["endpoint.shape.arrow"])
+    return [f"{text.ljust(width)}   {arrow} {note}" if note else text for text, note in pairs]
+
+
+def payload_shape(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str] | None:
+    """The request body, annotated. None when the endpoint sends none."""
+    if ep.payload is None:
+        return None
+    tree = _shape_node(ep.payload, infos)
+    paginate = ep.paginate
+    if paginate is not None and paginate.at_root == "payload" and isinstance(tree, dict):
+        node = tree
+        for key in paginate.at_keys[:-1]:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                node[key] = child
+            node = child
+        node[paginate.at_keys[-1]] = _Leaf(str(paginate.start), str(L["endpoint.shape.cursor"]))
+    return _aligned(_json_lines(tree))
+
+
+def query_shape(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str] | None:
+    """The query string, annotated. Flat by nature — a query param cannot nest."""
+    tree: dict[str, Any] = {key: _shape_node(value, infos, key) for key, value in ep.query.items()}
+    paginate = ep.paginate
+    if paginate is not None and paginate.at_root == "query":
+        tree[paginate.at_keys[-1]] = _Leaf(str(paginate.start), str(L["endpoint.shape.cursor"]))
+    if not tree:
+        return None
+    pairs = []
+    for key, value in tree.items():
+        if isinstance(value, _Leaf):
+            pairs.append((f"{key} = {value.text}", value.note))
+        else:
+            flat = json.dumps(_plain(value), ensure_ascii=False)
+            pairs.append((f"{key} = {flat}", ""))
+    return _aligned(pairs)
+
+
+def _plain(node: Any) -> Any:
+    """A shaped tree back to something json.dumps can print, for a nested query value."""
+    if isinstance(node, _Leaf):
+        return json.loads(node.text) if node.text.startswith('"') else node.text
+    if isinstance(node, Mapping):
+        return {key: _plain(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_plain(value) for value in node]
+    return node
+
+
 def correlated_origins(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str]:
     """Several params off one provider come from one record and must stay together."""
     used = [ref.marker.provider for ref in ep.markers()]
@@ -360,6 +471,10 @@ def render_key(template: str, source: str, endpoint: str, params: Mapping[str, A
     )
 
 
+def _url(value: str | None) -> str | None:
+    return None if value is None or labels.is_todo(value) else value
+
+
 def full_key(annotation: Annotation, key: str) -> str:
     """The bucket is one slot, counted once on the layout table — not once per key."""
     bucket = "<bucket>" if labels.is_todo(annotation.landing.bucket) else annotation.landing.bucket
@@ -389,6 +504,9 @@ def build(
     )
     cache: dict[str, list[dict[str, Any]]] = {}
     infos = describe_providers(source, annotation, ctx, cache)
+    # A URL nobody has filled in yet is no URL: the pointer stays the plain text it is
+    # today rather than becoming a link to the placeholder.
+    links = {name: _url(value) for name, value in annotation.links.model_dump().items()}
     order = document_order(source)
     deps = graph.known(graph.dependencies(source))
     dependents = {name: sorted(other for other in order if name in deps[other]) for name in order}
@@ -459,7 +577,13 @@ def build(
                 "depends_on": sorted(deps[name]),
                 "dependents": dependents[name],
                 "summary": summary,
+                # `params` is the exhaustive list; the workbook renders it. The document
+                # shows the *shape* instead, because a table of dotted paths hides the one
+                # thing a reader of a nested body needs to see.
                 "params": param_rows(ep, infos),
+                "payload_shape": payload_shape(ep, infos),
+                "query_shape": query_shape(ep, infos),
+                "detail": {"text": L.fmt("endpoint.detail", sheet=name), "url": links["workbook"]},
                 "correlated_origins": correlated_origins(ep, infos),
                 "pagination": pagination_rows(ep) or None,
                 "iteration_title": str(L["endpoint.iteration_title.paginated" if ep.paginate else "endpoint.iteration_title.plain"]),
@@ -532,8 +656,9 @@ def build(
             "history": history,
             "file": L.fmt("document.file", source=source.source),
         },
+        "links": links,
         "definitions": [{"term": term, "definition": text} for term, text in annotation.definitions.items()],
-        "related": _related(annotation, infos, bool(samples)),
+        "related": _related(annotation, infos, bool(samples), workbook_file, links),
         "environments": _environments(source, annotation),
         "auth": _auth(source, annotation),
         "endpoints": endpoints,
@@ -578,7 +703,7 @@ def build(
         },
         "appendix": {
             "samples": [e["sample"] for e in endpoints if e["sample"]],
-            "workbook": {"file": workbook_file, "tabs": _tabs(order)},
+            "workbook": {"file": workbook_file, "url": links["workbook"], "tabs": _tabs(order)},
         },
     }
     model["completeness"] = completeness(model, annotation, order)
@@ -760,13 +885,25 @@ def _environments(source: Source, annotation: Annotation) -> list[dict[str, str]
     return rows
 
 
-def _related(annotation: Annotation, infos: Mapping[str, ProviderInfo], has_samples: bool) -> list[dict[str, str]]:
-    rows = [_row(L["related.vendor_docs"], annotation.spec.vendor_docs)]
+def _related(
+    annotation: Annotation,
+    infos: Mapping[str, ProviderInfo],
+    has_samples: bool,
+    workbook_file: str,
+    links: Mapping[str, str | None],
+) -> list[dict[str, Any]]:
+    """§1.4. Every row may carry a URL; without one it renders as the text alone."""
+    rows = [_linked(L["related.vendor_docs"], annotation.spec.vendor_docs, links["vendor"])]
+    rows.append(_linked(L["related.workbook"], workbook_file, links["workbook"]))
     if any(info.kind == STATIC for info in infos.values()):
-        rows.append(_row(L["related.referentials"], L["related.referentials_value"]))
+        rows.append(_linked(L["related.referentials"], L["related.referentials_value"], None))
     if has_samples:
-        rows.append(_row(L["related.samples"], L["related.samples_value"]))
+        rows.append(_linked(L["related.samples"], L["related.samples_value"], links["samples"]))
     return rows
+
+
+def _linked(item: str, value: str, url: str | None) -> dict[str, Any]:
+    return {"item": item, "value": value, "url": url}
 
 
 def _tree(order: list[str], deps, dependents) -> list[str]:

@@ -34,8 +34,20 @@ def built(reference_source, reference_annotation):
 
 
 def parts(rendered: bytes) -> dict[str, str]:
+    """Every XML part, relationship files included — a hyperlink lives in one of those."""
     with zipfile.ZipFile(io.BytesIO(rendered)) as archive:
-        return {name: archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".xml")}
+        return {
+            name: archive.read(name).decode("utf-8")
+            for name in archive.namelist()
+            if name.endswith((".xml", ".rels"))
+        }
+
+
+def plain_text(xml: str) -> str:
+    """Document text with XML escapes resolved, since autoescape encodes every quote."""
+    import html
+
+    return html.unescape("".join(TEXT_RE.findall(xml)))
 
 
 def paragraphs(xml: str) -> list[tuple[str, str]]:
@@ -130,6 +142,35 @@ def test_the_code_style_keeps_a_block_together_and_indents_wraps(built):
     assert "w:keepNext" in block and "w:keepLines" in block
     assert "w:hanging" in block  # a key too long for the column wraps to a deeper indent
     assert "w:shd" in block and "w:pBdr" in block
+
+
+def test_a_filled_link_becomes_a_real_word_hyperlink(built):
+    rendered = parts(render_docx.render_bytes(TEMPLATE, built))
+    assert "<w:hyperlink" in rendered["word/document.xml"]
+    relationships = rendered["word/_rels/document.xml.rels"]
+    assert built["links"]["workbook"] in relationships
+    assert "TargetMode=\"External\"" in relationships
+
+
+def test_a_document_without_links_still_renders(built):
+    """Until the files are published, every pointer is the plain text it always was."""
+    built["links"] = dict.fromkeys(built["links"])
+    for endpoint in built["endpoints"]:
+        endpoint["detail"]["url"] = None
+    for row in built["related"]:
+        row["url"] = None
+    built["appendix"]["workbook"]["url"] = None
+    rendered = parts(render_docx.render_bytes(TEMPLATE, built))
+    assert "<w:hyperlink" not in rendered["word/document.xml"]
+    text = "".join(TEXT_RE.findall(rendered["word/document.xml"]))
+    assert "classeur d\'accompagnement, onglet « assets »" in text
+
+
+def test_the_request_shape_is_rendered_instead_of_a_parameter_table(built):
+    text = plain_text(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
+    assert "Corps de la requête, tel qu\'il part :" in text
+    assert '"assetType": "<assetType>"' in text
+    assert "Origine de la valeur" not in text  # the flat table moved to the workbook
 
 
 def test_nothing_test_specific_survived_into_the_template(built):

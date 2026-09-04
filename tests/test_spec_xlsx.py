@@ -25,8 +25,16 @@ def column(sheet, index: int, start: int = 2) -> list:
     return [sheet.cell(row=r, column=index).value for r in range(start, sheet.max_row + 1)]
 
 
-def header(sheet) -> list:
-    return [sheet.cell(row=1, column=c).value for c in range(1, sheet.max_column + 1)]
+def header(sheet, row: int = 1) -> list:
+    return [sheet.cell(row=row, column=c).value for c in range(1, sheet.max_column + 1) if sheet.cell(row=row, column=c).value]
+
+
+def block(sheet, title: str) -> int:
+    """The header row of a titled block — an endpoint sheet holds request then response."""
+    for r in range(1, sheet.max_row + 1):
+        if sheet.cell(row=r, column=1).value == title:
+            return r + 1
+    raise AssertionError(f"no block titled {title!r} in {sheet.title}")
 
 
 def test_sheets_are_the_fixed_three_then_one_per_endpoint(workbook):
@@ -53,6 +61,14 @@ def test_the_metadata_sheet_uses_iceberg_types(workbook):
     assert "timestamp" in column(sheet, 2) and "int" in column(sheet, 2)
 
 
+def test_the_readme_links_back_to_the_document(workbook):
+    """Once both files are published the pair is navigable in both directions."""
+    built, book = workbook
+    sheet = book["Readme"]
+    cell = next(c for row in sheet.iter_rows() for c in row if c.value == built["document"]["file"])
+    assert cell.hyperlink.target == built["links"]["document"]
+
+
 def test_the_readme_has_no_model_vocabulary(workbook):
     _built, book = workbook
     values = [str(cell.value) for row in book["Readme"].iter_rows() for cell in row if cell.value]
@@ -60,11 +76,38 @@ def test_the_readme_has_no_model_vocabulary(workbook):
     assert L["workbook.readme.tabs_title"] in values
 
 
-def test_a_response_sheet_without_evidence_says_so(workbook):
+def test_an_endpoint_sheet_holds_the_request_above_the_response(workbook):
+    _built, book = workbook
+    sheet = book["assets"]
+    request = block(sheet, L["workbook.blocks.request"])
+    response = block(sheet, L["workbook.blocks.response"])
+    assert request < response
+    assert header(sheet, request) == list(L.section("workbook.request.columns").values())
+    assert header(sheet, response) == list(L.section("workbook.response.columns").values())
+
+
+def test_the_request_block_lists_every_parameter(workbook):
+    built, book = workbook
+    sheet = book["assets"]
+    start = block(sheet, L["workbook.blocks.request"])
+    params = [e for e in built["endpoints"] if e["name"] == "assets"][0]["params"]
+    rows = [sheet.cell(row=start + 1 + i, column=1).value for i in range(len(params))]
+    assert rows == [p["name"] for p in params]
+    assert sheet.cell(row=start + 1, column=4).value == params[0]["origin"]
+
+
+def test_an_endpoint_with_no_parameters_says_so(workbook):
     _built, book = workbook
     sheet = book["tenant_info"]
-    assert header(sheet) == list(L.section("workbook.response.columns").values())
-    assert sheet.cell(row=2, column=1).value == L["workbook.response.empty"]
+    start = block(sheet, L["workbook.blocks.request"])
+    assert sheet.cell(row=start + 1, column=1).value == L["workbook.request.empty"]
+
+
+def test_a_response_block_without_evidence_says_so(workbook):
+    _built, book = workbook
+    sheet = book["tenant_info"]
+    start = block(sheet, L["workbook.blocks.response"])
+    assert sheet.cell(row=start + 1, column=1).value == L["workbook.response.empty"]
 
 
 def test_a_response_sheet_describes_the_body_as_observed(reference_source, reference_annotation, tmp_path):
@@ -81,11 +124,15 @@ def test_a_response_sheet_describes_the_body_as_observed(reference_source, refer
     built = model.build(reference_source, reference_annotation, ev.Evidence(envelopes={"assets": saved}))
     book = load_workbook(render_xlsx.render(built.model, tmp_path / "a.xlsx"))
     sheet = book["assets"]
-    rows = {sheet.cell(row=r, column=1).value: [sheet.cell(row=r, column=c).value for c in range(2, 6)] for r in range(2, sheet.max_row + 1)}
+    start = block(sheet, L["workbook.blocks.response"])
+    rows = {
+        sheet.cell(row=r, column=1).value: [sheet.cell(row=r, column=c).value for c in range(2, 6)]
+        for r in range(start + 1, sheet.max_row + 1)
+    }
     assert rows["$.hasNext"] == ["boolean", "Non", 1.0, "True"]
     assert rows["$.data[].id.id"][:2] == ["string", "Oui"]  # present in one response of two
     assert rows["$.data[].label"][:2] == ["null", "Oui"]
-    assert sheet.cell(row=2, column=4).number_format == "0 %"
+    assert sheet.cell(row=start + 1, column=4).number_format == "0 %"
 
 
 def test_no_sheet_and_no_cell_mentions_volumes(workbook):

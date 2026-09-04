@@ -236,6 +236,103 @@ def test_parameter_lists_are_named_and_described_generically(built):
     assert rows(chained["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
 
 
+# --- the request as it goes on the wire ----------------------------------------------
+
+
+def test_a_nested_payload_is_shown_as_a_body_not_as_dotted_paths():
+    """The whole point: `pageLink.page` in a table hides the shape a reader needs."""
+    source = inline(
+        {
+            "search": {
+                "method": "POST",
+                "path": "/search",
+                "payload": {"pageLink": {"pageSize": 100, "sortOrder": {"property": "name"}}, "assetType": {"from": "kinds"}},
+                "paginate": {"style": "page_number", "at": "payload.pageLink.page", "has_more": "$.hasNext"},
+                "output": "o/{assetType}_{page}.json",
+            }
+        },
+        {"kinds": {"fn": "literal", "args": {"values": [{"assetType": "PUMP"}]}}},
+    )
+    shape = endpoint(model.build(source, annotation_for(source)), "search")["payload_shape"]
+    assert [line.split("   ←")[0].rstrip() for line in shape] == [
+        "{",
+        '  "pageLink": {',
+        '    "pageSize": 100,',
+        '    "sortOrder": {',
+        '      "property": "name"',
+        "    },",
+        '    "page": 0',
+        "  },",
+        '  "assetType": "<assetType>"',
+        "}",
+    ]
+
+
+def test_every_value_in_the_shape_says_where_it_comes_from():
+    source = inline(
+        {
+            "search": {
+                "method": "POST",
+                "path": "/search",
+                "payload": {"pageSize": 100, "assetType": {"from": "kinds"}},
+                "paginate": {"style": "page_number", "at": "payload.page"},
+                "output": "o/{assetType}_{page}.json",
+            }
+        },
+        {"kinds": {"fn": "literal", "args": {"values": [{"assetType": "PUMP"}]}}},
+    )
+    notes = [line.split("←")[1].strip() for line in endpoint(model.build(source, annotation_for(source)), "search")["payload_shape"] if "←" in line]
+    assert notes == ["valeur fixe", "assetType du référentiel", "curseur de pagination, incrémenté à chaque page"]
+
+
+def test_a_query_shape_is_flat_and_carries_the_cursor(built):
+    shape = endpoint(built, "alarms")["query_shape"]
+    assert [line.split("←")[0].rstrip() for line in shape] == [
+        "pageSize = 100",
+        'searchStatus = "ACTIVE"',
+        'type = "<type>"',
+    ]
+    assert [line.split("←")[1].strip() for line in shape] == ["valeur fixe", "valeur fixe", "types d'actifs"]
+    # One column for the notes, so the origins read as a column and not as clutter.
+    assert len({line.index("←") for line in shape}) == 1
+    assert endpoint(built, "alarms")["payload_shape"] is None
+
+
+def test_an_endpoint_that_sends_nothing_has_no_shape(built):
+    tenant = endpoint(built, "tenant_info")
+    assert tenant["payload_shape"] is None and tenant["query_shape"] is None
+
+
+def test_the_shape_never_replaces_the_exhaustive_list(built):
+    """The workbook still renders every parameter; the document shows the shape."""
+    assert [p["name"] for p in endpoint(built, "assets")["params"]] == ["assetType", "pageSize"]
+
+
+# --- links ---------------------------------------------------------------------------
+
+
+def test_a_filled_link_reaches_the_pointers_that_can_use_it(built):
+    assert built.model["links"]["workbook"] == "https://exemple.sharepoint.com/sites/data/Spec_Annexes.xlsx"
+    assert endpoint(built, "assets")["detail"] == {
+        "text": "Détail paramètre par paramètre : classeur d'accompagnement, onglet « assets ».",
+        "url": built.model["links"]["workbook"],
+    }
+    assert built.model["appendix"]["workbook"]["url"] == built.model["links"]["workbook"]
+
+
+def test_a_link_nobody_has_filled_in_is_no_link(built):
+    """A marker is not a URL, so the pointer stays the plain text it already was."""
+    assert built.model["links"]["samples"] is None and built.model["links"]["vendor"] is None
+    vendor = next(r for r in built.model["related"] if r["item"] == "Documentation API de l'éditeur")
+    assert vendor["url"] is None
+
+
+def test_related_lists_the_workbook_with_its_url(built):
+    workbook = next(r for r in built.model["related"] if r["item"] == "Classeur d'accompagnement")
+    assert workbook["value"] == built.model["appendix"]["workbook"]["file"]
+    assert workbook["url"] == built.model["links"]["workbook"]
+
+
 # --- auth ---------------------------------------------------------------------------
 
 

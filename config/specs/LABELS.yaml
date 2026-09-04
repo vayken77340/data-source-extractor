@@ -94,6 +94,7 @@ related:
   referentials_value: "fichiers joints — voir §4.3"
   samples: Charges utiles d'exemple
   samples_value: "fichiers joints — voir annexe A"
+  workbook: Classeur d'accompagnement
 
 endpoint:
   title: "{method} {path} — {name}"
@@ -114,6 +115,14 @@ endpoint:
     solidaires. Ils ne doivent jamais être recombinés entre eux : un produit cartésien
     produirait des requêtes dépourvues de sens.
   iteration_title: { paginated: Pagination et itération, plain: Itération }
+  # The request as it goes on the wire. A nested body is shown as a body, because a table
+  # of dotted paths hides the one thing a reader needs to see — its shape.
+  shape:
+    fixed: valeur fixe
+    cursor: curseur de pagination, incrémenté à chaque page
+    arrow: "←"
+  # The exhaustive table lives in the workbook; this points at it.
+  detail: "Détail paramètre par paramètre : classeur d'accompagnement, onglet « {sheet} »."
   pagination:
     carried_by: Pagination portée par
     cursor: Emplacement du curseur
@@ -260,6 +269,7 @@ workbook:
     columns: [Élément, Valeur]
     rows:
       document: Document
+      document_link: Spécification (document Word)
       source_system: Système source
       version: Version
       date: Date
@@ -288,6 +298,17 @@ workbook:
     pagination_cell: "{item} : {value}"
   metadata:
     columns: [Attribut, Type, Obligatoire, Description]
+  # An endpoint's sheet holds both directions, request above response.
+  blocks:
+    request: Paramètres de requête
+    response: Champs de la réponse
+  request:
+    columns:
+      name: Paramètre
+      location: Emplacement
+      type: Type
+      origin: Origine de la valeur
+    empty: "Cet endpoint ne prend aucun paramètre."
   response:
     columns:
       path: Chemin JSON

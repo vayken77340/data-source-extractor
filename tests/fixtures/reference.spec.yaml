@@ -25,6 +25,14 @@ landing:
   key: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}.json"
   key_paginated: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"   # endpoints that walk pages
 
+links:
+  # Filled in once the files are published (SharePoint, a drive, anywhere). Until then a
+  # pointer renders as the plain text it already is, and nothing breaks.
+  workbook: https://exemple.sharepoint.com/sites/data/Spec_Annexes.xlsx
+  document: https://exemple.sharepoint.com/sites/data/Spec.docx
+  samples: "[À COMPLÉTER]"
+  vendor: "[À COMPLÉTER]"
+
 environments:
   qa:
     base_url: https://ref-qa.example.com/api
