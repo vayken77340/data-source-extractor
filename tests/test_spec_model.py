@@ -250,7 +250,30 @@ def test_the_landing_example_is_built_by_the_envelope_builder(built):
 def test_rendered_keys_use_real_parameters_and_the_run_date(built):
     keys = built.model["landing"]["rendered_keys"]
     assert keys[0] == "s3://bucket-de-test/raw/source=reference/entity=assets/extract_date=2026-09-04/pump_p0.json"
-    assert keys[3].endswith("entity=measures/extract_date=2026-09-04/id_p0.json")
+    assert keys[3].endswith("entity=measures/extract_date=2026-09-04/id.json")
+
+
+def test_only_a_paginated_endpoint_gets_the_paginated_key(built):
+    """`_p0` on an endpoint that answers once would claim a pagination it does not have."""
+    by_name = {e["name"]: e for e in built.model["endpoints"]}
+    assert by_name["assets"]["landing_key"].endswith("_p{page}.json")
+    for name in ("alarms", "tenant_info", "measures"):
+        assert by_name[name]["landing_key"].endswith("{slug}.json"), name
+        assert "_p0" not in by_name[name]["rendered_key"], name
+
+
+def test_an_endpoint_key_wins_over_both_defaults_and_is_listed_as_an_exception(
+    reference_source, reference_annotation
+):
+    reference_annotation.endpoints["measures"].key = "m/{assetType}/{assetName}.json"
+    model_ = model.build(reference_source, reference_annotation, generated_at=GENERATED).model
+    assert model_["landing"]["overrides"] == [{"endpoint": "measures", "key": "m/{assetType}/{assetName}.json"}]
+
+
+def test_a_paginated_default_is_not_an_exception(built):
+    """Every paginated endpoint differs from the base key; that is the rule, not a deviation."""
+    assert built.model["landing"]["overrides"] == []
+    assert built.model["landing"]["key_template_paginated"].endswith("_p{page}.json")
 
 
 def test_an_unresolvable_placeholder_renders_visibly_rather_than_empty():

@@ -23,10 +23,13 @@ from api_extractor.config.models import Source
 from specgen.annotation import Annotation
 from specgen.labels import TODO
 
-# Valid for any source, whatever its endpoints: `slug` and `page` are intrinsic, so this
-# resolves everywhere, varies per request, and varies per page — the three things
-# `spec.landing.*` checks. Narrow it once you know what the platform wants.
-DEFAULT_KEY = "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"
+# Valid for any source, whatever its endpoints: `slug` and `page` are intrinsic, so these
+# resolve everywhere and vary per request. `key` covers the endpoints that answer once,
+# `key_paginated` those that walk pages — which is the only distinction that reliably
+# changes a file name. Narrow them once you know what the platform wants.
+_STEM = "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}"
+DEFAULT_KEY = f"{_STEM}.json"
+DEFAULT_KEY_PAGINATED = f"{_STEM}_p{{page}}.json"
 
 
 def build(source: Source, name: str, today: date | None = None) -> str:
@@ -58,6 +61,13 @@ def build(source: Source, name: str, today: date | None = None) -> str:
         f"  bucket: {_scalar(TODO)}",
         "  prefix: raw",
         f"  key: {_scalar(DEFAULT_KEY)}",
+        f"  key_paginated: {_scalar(DEFAULT_KEY_PAGINATED)}   # endpoints that walk pages",
+        "",]
+    lines += [
+        "# A single endpoint may override both:",
+        "#   endpoints:",
+        "#     <name>:",
+        f"#       key: {DEFAULT_KEY}",
         "",
         "# definitions:            # domain terms as the vendor means them, not as you use them",
         '#   Actif: "…"',

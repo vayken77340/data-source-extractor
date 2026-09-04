@@ -115,6 +115,23 @@ def test_the_marker_count_in_the_document_equals_the_model_count(built):
     assert text.count(TODO_MARK) == built["completeness"]["todo"]
 
 
+def test_code_blocks_carry_the_code_style_not_direct_formatting(built):
+    """A block styled run by run cannot be restyled in Word, which the template is for."""
+    rendered = parts(render_docx.render_bytes(TEMPLATE, built))
+    assert 'w:styleId="Code"' in rendered["word/styles.xml"]
+    document = rendered["word/document.xml"]
+    assert document.count('w:val="Code"') >= len(built["landing"]["example_lines"])
+    assert "Consolas" not in document
+
+
+def test_the_code_style_keeps_a_block_together_and_indents_wraps(built):
+    styles = parts(render_docx.render_bytes(TEMPLATE, built))["word/styles.xml"]
+    block = styles[styles.index('w:styleId="Code"') :][:1200]
+    assert "w:keepNext" in block and "w:keepLines" in block
+    assert "w:hanging" in block  # a key too long for the column wraps to a deeper indent
+    assert "w:shd" in block and "w:pBdr" in block
+
+
 def test_nothing_test_specific_survived_into_the_template(built):
     """The template was derived from a document generated for one source; none of that
     source's words may be baked into it."""

@@ -64,6 +64,7 @@ EXPECTED_CHECK_IDS = frozenset(
         "spec.lists.stale",
         "spec.landing.key_resolvable",
         "spec.landing.key_page",
+        "spec.landing.key_page_stray",
         "spec.landing.key_distinguishes",
         "spec.secrets.no_env_refs",
         "spec.secrets.no_leak",
@@ -133,12 +134,21 @@ def _lists_stale(ctx: Context) -> list[Finding]:
 
 
 def _effective_keys(ctx: Context) -> list[tuple[str, str, str]]:
-    """(loc, endpoint, key template) for every endpoint, override or default."""
+    """(loc, endpoint, key template) for every endpoint, whichever of the three applies.
+
+    `loc` names the line a reader should go and edit, which is the endpoint's own key,
+    the paginated default, or the base one.
+    """
     out = []
-    for name in ctx.source.endpoints:
-        override = ctx.annotation.endpoint(name).key
-        loc = f"endpoints.{name}.key" if override else "landing.key"
-        out.append((loc, name, ctx.annotation.landing_key(name)))
+    for name, endpoint in ctx.source.endpoints.items():
+        paginated = endpoint.paginate is not None
+        if ctx.annotation.endpoint(name).key:
+            loc = f"endpoints.{name}.key"
+        elif paginated and ctx.annotation.landing.key_paginated:
+            loc = "landing.key_paginated"
+        else:
+            loc = "landing.key"
+        out.append((loc, name, ctx.annotation.landing_key(name, paginated=paginated)))
     return out
 
 
@@ -167,6 +177,22 @@ def _key_page(ctx: Context) -> list[Finding]:
         (loc, f"{key!r} has no {{page}}, so every page of paginated endpoint {name!r} would overwrite the last")
         for loc, name, key in _effective_keys(ctx)
         if ctx.source.endpoints[name].paginate is not None and "page" not in placeholders(key)
+    ]
+
+
+@check("spec.landing.key_page_stray")
+def _key_page_stray(ctx: Context) -> list[Finding]:
+    """The mirror of `key_page`. An endpoint that answers once renders `_p0` forever, and
+    the key then claims a pagination the API does not have — which a Bronze loader may
+    well believe."""
+    return [
+        (
+            loc,
+            f"{key!r} carries {{page}} but endpoint {name!r} does not paginate — every file "
+            f"would land as page 0 and the key would claim a pagination the API does not have",
+        )
+        for loc, name, key in _effective_keys(ctx)
+        if ctx.source.endpoints[name].paginate is None and "page" in placeholders(key)
     ]
 
 

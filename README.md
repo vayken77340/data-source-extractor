@@ -385,10 +385,25 @@ written: a tag Word split across runs, a tag naming a field the model does not h
 the nearest valid names), a required section removed by accident. A per-source
 `config/specs/<name>.template.docx` wins over the default when present.
 
+**The landing key comes in two defaults**, because whether an endpoint paginates is the
+only thing that reliably changes a file name. `key_paginated` applies to the endpoints
+that walk pages, `key` to the rest, and `endpoints.<name>.key` overrides both for one
+endpoint. A single key carrying `{page}` would render `_p0` on every endpoint that
+answers once, telling the receiving team the API pages when it does not; one without it
+would silently overwrite every page but the last. Both mistakes are checks.
+
 `--check` also fails on an endpoint with no annotation, an annotation naming a vanished
 endpoint, a landing-key placeholder the endpoint cannot fill (every file would collapse
-onto one key), a paginated endpoint whose key has no `{page}`, and a secret value that
-somehow reached the model or a sample — the same two-layer defence as the log scrubber.
+onto one key), a paginated endpoint whose key has no `{page}` or a non-paginated one whose
+key has it, and a secret value that somehow reached the model or a sample — the same
+two-layer defence as the log scrubber.
+
+**Code blocks in the document use a `Code` paragraph style**, so you restyle every JSON
+example, pseudocode block and key at once from Word's style pane. It carries the shading,
+the keep-with-next that stops a 33-line envelope splitting across a page, and the hanging
+indent that makes a long key's wrap read as a continuation. A template made before this
+existed gets the style with `python tools/add_code_style.py <template.docx>`, which edits
+it in place and keeps your other changes.
 
 `output/_docs/` is under `output/`, so it is gitignored: the samples are real data.
 

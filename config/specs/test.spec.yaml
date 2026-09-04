@@ -20,7 +20,8 @@ secrets: OpenBao
 landing:
   bucket: "[À COMPLÉTER]"
   prefix: raw
-  key: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"
+  key: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}.json"
+  key_paginated: "source={source}/entity={endpoint}/extract_date={extract_date}/{slug}_p{page}.json"   # endpoints that walk pages
 
 environments:
   qa:

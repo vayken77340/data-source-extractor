@@ -80,9 +80,17 @@ class SpecBlock(_Base):
 
 class Landing(_Base):
     """Where files land. Belongs to the target platform, which is why it is not in the
-    source YAML: the extractor writes under `output/` and knows nothing of S3."""
+    source YAML: the extractor writes under `output/` and knows nothing of S3.
+
+    Two defaults rather than one, because whether an endpoint paginates is the only thing
+    that reliably changes the shape of its file name. A single key carrying `{page}`
+    renders `_p0` on every endpoint that answers once, which tells the receiving team the
+    API pages when it does not; a single key without it silently overwrites every page but
+    the last. `key_paginated` applies to the endpoints that walk, `key` to the rest.
+    """
 
     key: str
+    key_paginated: str | None = None  # optional; `key` covers everything when absent
     bucket: str = TODO  # structural
     prefix: str | None = None  # optional
     encryption: str | None = None  # optional
@@ -143,8 +151,15 @@ class Annotation(_Base):
         """
         return self.endpoints.get(name) or EndpointAnnotation()
 
-    def landing_key(self, name: str) -> str:
-        return self.endpoint(name).key or self.landing.key
+    def landing_key(self, name: str, *, paginated: bool = False) -> str:
+        """The key template for one endpoint. Most specific first: its own `key`, then
+        `key_paginated` when it walks pages, then `key`."""
+        override = self.endpoint(name).key
+        if override:
+            return override
+        if paginated and self.landing.key_paginated:
+            return self.landing.key_paginated
+        return self.landing.key
 
 
 def check_date(value: str) -> str:

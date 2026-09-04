@@ -82,16 +82,35 @@ def test_a_per_endpoint_override_is_checked_under_its_own_location(reference_sou
 
 def test_a_paginated_endpoint_needs_page_in_its_key(reference_source):
     raw = copy.deepcopy(RAW)
-    raw["landing"]["key"] = "e={endpoint}/{slug}.json"
+    del raw["landing"]["key_paginated"]
     (message,) = failing(check.run(context(reference_source, raw)))["spec.landing.key_page"]
     assert "paginated endpoint 'assets'" in message
+    assert message.startswith("landing.key:")
+
+
+def test_a_stray_page_on_an_endpoint_that_answers_once(reference_source):
+    """The mirror: `_p0` forever, and a key claiming a pagination the API lacks."""
+    raw = copy.deepcopy(RAW)
+    raw["landing"]["key"] = raw["landing"]["key_paginated"]
+    found = failing(check.run(context(reference_source, raw)))["spec.landing.key_page_stray"]
+    assert {m.split(":")[0] for m in found} == {"landing.key"}
+    assert len(found) == 3  # alarms, tenant_info, measures — not assets
+    assert any("'tenant_info' does not paginate" in m for m in found)
+
+
+def test_the_paginated_default_is_reported_under_its_own_location(reference_source):
+    raw = copy.deepcopy(RAW)
+    raw["landing"]["key_paginated"] = "e={endpoint}/{ghost}_p{page}.json"
+    (message,) = failing(check.run(context(reference_source, raw)))["spec.landing.key_resolvable"]
+    assert message.startswith("landing.key_paginated: {ghost} does not resolve for endpoint 'assets'")
 
 
 def test_a_fanned_out_endpoint_needs_something_that_varies_in_its_key(reference_source):
     raw = copy.deepcopy(RAW)
-    raw["landing"]["key"] = "e={endpoint}/p{page}.json"
+    raw["landing"]["key"] = "e={endpoint}/nothing.json"
+    raw["landing"]["key_paginated"] = "e={endpoint}/p{page}.json"
     found = failing(check.run(context(reference_source, raw)))["spec.landing.key_distinguishes"]
-    assert {m.split(":")[0] for m in found} == {"landing.key"}
+    assert {m.split(":")[0] for m in found} == {"landing.key", "landing.key_paginated"}
     assert any("'alarms' (type)" in m for m in found)
     assert not any("tenant_info" in m for m in found)  # nothing fans out there
 

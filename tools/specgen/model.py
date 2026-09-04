@@ -444,7 +444,7 @@ def build(
             summary.append(_row(L["endpoint.summary.vendor_ref"], ann.vendor_ref))
 
         example_params = _example_params(ep, plans[name].requests, sample)
-        key_template = annotation.landing_key(name)
+        key_template = annotation.landing_key(name, paginated=ep.paginate is not None)
         rendered = render_key(key_template, source.source, name, example_params, extract_date=today)
 
         endpoints.append(
@@ -472,6 +472,9 @@ def build(
                 "rationale": ann.rationale,
                 "files": str(L["endpoint.files.page" if ep.paginate else "endpoint.files.request"]),
                 "landing_key": key_template,
+                # An exception is one this endpoint declares, not merely a key that
+                # differs from the base — every paginated endpoint differs from the base.
+                "key_overridden": ann.key is not None,
                 "rendered_key": full_key(annotation, rendered),
                 "sample": sample_entry,
                 "provider_error": next((infos[n].error for n in _providers_of(ep) if infos.get(n) and infos[n].error), None),
@@ -567,10 +570,11 @@ def build(
             "layout": _layout(annotation),
             "key_template": annotation.landing.key,
             "rendered_keys": [e["rendered_key"] for e in endpoints],
+            "key_template_paginated": annotation.landing.key_paginated,
             "overrides": [
                 {"endpoint": e["name"], "key": e["landing_key"]}
                 for e in endpoints
-                if e["landing_key"] != annotation.landing.key
+                if e["key_overridden"]
             ],
         },
         "appendix": {
@@ -682,7 +686,7 @@ def _parent_key(parent: str, source, annotation, evidence, today) -> str:
                 metadata = saved.envelope.get("metadata") or {}
                 page = _page_of(metadata.get("request") or {}, ep) if ep.paginate else 0
                 return render_key(
-                    annotation.landing_key(name),
+                    annotation.landing_key(name, paginated=ep.paginate is not None),
                     source.source,
                     name,
                     metadata.get("params") or {},

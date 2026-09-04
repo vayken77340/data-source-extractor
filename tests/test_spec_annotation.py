@@ -79,10 +79,20 @@ def test_a_missing_endpoint_annotation_is_all_markers_not_a_crash():
     assert annotation.endpoint("ghost").purpose == TODO
 
 
-def test_a_per_endpoint_key_overrides_the_landing_key():
-    annotation = parse(endpoints={"a": {"key": "a/{slug}.json"}, "b": {}})
-    assert annotation.landing_key("a") == "a/{slug}.json"
-    assert annotation.landing_key("b") == MINIMAL["landing"]["key"]
+def test_the_key_resolves_most_specific_first():
+    """Its own key, then the paginated default, then the base one."""
+    annotation = parse(
+        landing={**MINIMAL["landing"], "key_paginated": "paged/{slug}_p{page}.json"},
+        endpoints={"own": {"key": "own/{slug}.json"}, "plain": {}},
+    )
+    assert annotation.landing_key("own", paginated=True) == "own/{slug}.json"
+    assert annotation.landing_key("plain", paginated=True) == "paged/{slug}_p{page}.json"
+    assert annotation.landing_key("plain", paginated=False) == MINIMAL["landing"]["key"]
+
+
+def test_without_a_paginated_default_the_base_key_covers_everything():
+    annotation = parse()
+    assert annotation.landing_key("a", paginated=True) == MINIMAL["landing"]["key"]
 
 
 def test_optional_blocks_default_to_nothing():
@@ -139,6 +149,13 @@ def test_a_scaffold_answers_nothing_and_says_so(reference_source, scaffolded):
     done = model.build(reference_source, annotation).model["completeness"]
     assert (done["filled"], done["percent"]) == (0, 0.0)
     assert done["todo"] > 20
+
+
+def test_a_scaffold_offers_both_key_defaults(scaffolded):
+    annotation = load_annotation(scaffolded)
+    assert annotation.landing.key.endswith("{slug}.json")
+    assert annotation.landing.key_paginated.endswith("{slug}_p{page}.json")
+    assert annotation.landing_key("x", paginated=True) == annotation.landing.key_paginated
 
 
 def test_a_scaffold_carries_what_the_source_already_knows(reference_source, scaffolded):
