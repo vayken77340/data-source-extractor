@@ -117,7 +117,7 @@ def test_every_contract_type_and_mandatory_key_has_a_label():
 
 def test_every_workbook_sheet_is_fully_described():
     sheets = L.section("workbook.sheets")
-    assert set(sheets) == {"readme", "endpoints", "metadata", "response"}
+    assert set(sheets) == {"readme", "endpoints", "metadata", "list", "response"}
     for entry in sheets.values():
         assert set(entry) == {"name", "contents", "reader"}
 

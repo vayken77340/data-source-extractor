@@ -34,7 +34,7 @@ from api_extractor.plan.binding import RequestSpec
 from api_extractor.providers import registry
 from api_extractor.providers.registry import ProviderContext
 from specgen import contract, evidence as ev, labels
-from specgen.annotation import Annotation
+from specgen.annotation import Annotation, read_yaml
 from specgen.labels import TODO, L
 
 SCHEMA = "spec-model/2"
@@ -59,6 +59,7 @@ class ProviderInfo:
     fields: tuple[str, ...]
     phrase: str
     note: str | None
+    generated_at: str | None = None
 
 
 # --- ordering -----------------------------------------------------------------------
@@ -110,7 +111,9 @@ def describe_providers(
             error = f"{type(exc).__name__}: {exc}"
         fields = _fields_of(rows, decl.args)
         note = annotation.lists.get(name)
+        referential = referential_of(decl.args)
         infos[name] = ProviderInfo(
+            generated_at=generated_at(referential) if referential and kind == STATIC else None,
             name=name,
             kind=kind,
             targets=targets,
@@ -144,13 +147,14 @@ def _phrase(source: Source, kind: str, targets: tuple[str, ...], fields: tuple[s
     return L.fmt("lists.static", fields=" / ".join(fields) if fields else L["lists.default_field"])
 
 
-def list_rows(source: Source, info: ProviderInfo) -> list[dict[str, str]]:
-    """§4.3: how to obtain one parameter list, in generic terms.
+def list_rows(source: Source, info: ProviderInfo, sheets: Mapping[str, str]) -> list[dict[str, str]]:
+    """How to obtain one parameter list, in terms the receiving team can act on.
 
-    Args naming an endpoint render as that endpoint's method and path; args pointing at a
-    file under `config/` or `input/` render as the attached referential — the document
-    never mentions this repo's layout. Everything else is precise vocabulary the external
-    team needs verbatim: a JSONPath, a join key.
+    A list whose values come from a file has those values in the workbook, so this says
+    which sheet holds them and nothing more — the values themselves are a table, and a
+    table belongs in a spreadsheet. A list read out of a previous endpoint's responses has
+    no values to tabulate, so this is its recipe: which endpoint, which JSONPath, which
+    join. `sheets` maps a referential's path to the sheet that carries it.
     """
     decl = source.providers[info.name]
     arg_labels = L.section("lists.args")
@@ -159,27 +163,75 @@ def list_rows(source: Source, info: ProviderInfo) -> list[dict[str, str]]:
         target = source.endpoints.get(info.targets[0])
         if target is not None:
             rows.append(_row(L["lists.origin"], L.fmt("lists.origin_chained", method=target.method, path=target.path)))
-    else:
-        rows.append(_row(L["lists.origin"], L["lists.origin_static"]))
+    elif info.name in sheets:
+        rows.append(_row(L["lists.values"], L.fmt("lists.in_sheet", sheet=sheets[info.name])))
+    if info.generated_at:
+        rows.append(_row(L["lists.generated"], info.generated_at))
     for key, value in decl.args.items():
         if isinstance(value, str) and value in source.endpoints:
             continue
-        if isinstance(value, str) and value.startswith(("config/", "input/")):
-            rows.append(_row(L["lists.referential"], L["lists.attached"]))
+        if isinstance(value, str) and _is_referential(value):
+            # The lookup table is a referential too, and it usually *is* one of the lists
+            # that already has a sheet — so point at that sheet rather than describing it.
+            sheet = sheets.get(value)
+            rows.append(_row(L["lists.lookup"], L.fmt("lists.in_sheet", sheet=sheet) if sheet else L["lists.attached"]))
         elif key == "fields" and isinstance(value, Mapping):
             for field_name, path in value.items():
                 rows.append(_row(L.fmt("lists.value_of", field=field_name), L.fmt("lists.field_relative", path=path)))
-        elif key == "values" and isinstance(value, list):
-            rows.append(_row(arg_labels.get("values", key), _values_text(value)))
+        elif key in ("values", "columns"):
+            continue  # what the list holds is the sheet's business, not a row here
         elif isinstance(value, list):
             rows.append(_row(arg_labels.get(key, key), ", ".join(str(item) for item in value)))
         else:
             rows.append(_row(arg_labels.get(key, key), str(value)))
-    if info.fields:
+    if info.kind == CHAINED and info.fields:
         rows.append(_row(L["lists.fields"], ", ".join(info.fields)))
     if info.note:
         rows.append(_row(L["lists.meaning"], info.note))
     return rows
+
+
+def _is_referential(value: str) -> bool:
+    """A provider arg that names a file this repo keeps, rather than a JSONPath or a key."""
+    return value.startswith(("config/", "input/"))
+
+
+def referential_of(args: Mapping[str, Any]) -> str | None:
+    """The file a provider reads its values from, whichever argument names it."""
+    for value in args.values():
+        if isinstance(value, str) and _is_referential(value):
+            return value
+    return None
+
+
+def generated_at(path: str) -> str | None:
+    """When a referential was produced, if it records that. A referential with no date is
+    one nobody can tell is stale. Tolerant: the file may be absent, or shaped otherwise."""
+    try:
+        document = read_yaml(Path(path)) if path.endswith((".yaml", ".yml")) else json.loads(Path(path).read_text(encoding="utf-8"))
+        stamp = document.get("generated_at") if isinstance(document, Mapping) else None
+        return labels.fr_date(stamp) if stamp else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def sheet_title(name: str) -> str:
+    """Excel caps a sheet name at 31 characters and forbids a few of them."""
+    return "".join("_" if character in '[]:*?/\\' else character for character in name)[:31]
+
+
+def unique_title(name: str, taken: set[str]) -> str:
+    """Two lists could be named alike; Excel would refuse the second sheet."""
+    title = sheet_title(name)
+    if title.casefold() not in taken:
+        taken.add(title.casefold())
+        return title
+    for suffix in range(2, 100):  # pragma: no branch - 98 collisions is not a real source
+        candidate = f"{sheet_title(name)[: 31 - len(str(suffix)) - 1]} {suffix}"
+        if candidate.casefold() not in taken:
+            taken.add(candidate.casefold())
+            return candidate
+    raise ValueError(f"cannot find a free sheet name for {name!r}")  # pragma: no cover
 
 
 def _values_text(values: list[Any]) -> str:
@@ -549,6 +601,10 @@ def build(
     )
     cache: dict[str, list[dict[str, Any]]] = {}
     infos = describe_providers(source, annotation, ctx, cache)
+    # A list backed by values is a table, and a table belongs in the workbook. One sheet
+    # each; `sheets` then lets every mention of it point at the sheet by name, including
+    # the mention of a lookup table that happens to be the same referential.
+    value_lists, sheets = _value_lists(source, infos)
     # A URL nobody has filled in yet is no URL: the pointer stays the plain text it is
     # today rather than becoming a link to the placeholder.
     links = {name: _url(value) for name, value in annotation.links.model_dump().items()}
@@ -629,6 +685,15 @@ def build(
                 "payload_shape": payload_shape(ep, infos),
                 "query_shape": query_shape(ep, infos),
                 "response_shape": response_shape(sample, ann.sample.redact if ann.sample else ()),
+                # The lists this endpoint is driven by, described where it is described.
+                # A list backed by a file collapses to one row pointing at its sheet; a
+                # chained one keeps its recipe, and feeds one endpoint almost by
+                # construction, so nothing is duplicated by putting it here.
+                "lists": [
+                    {"name": infos[provider].phrase, "rows": list_rows(source, infos[provider], sheets)}
+                    for provider in sorted(_providers_of(ep))
+                    if provider in infos
+                ],
                 "correlated_origins": correlated_origins(ep, infos),
                 "pagination": pagination_rows(ep) or None,
                 "iteration_title": str(L["endpoint.iteration_title.paginated" if ep.paginate else "endpoint.iteration_title.plain"]),
@@ -723,17 +788,6 @@ def build(
                 }
                 for i, name in enumerate(order, start=1)
             ],
-            "lists": [
-                {
-                    "name": infos[name].phrase,
-                    "used_by": L.fmt(
-                        "lists.used_by",
-                        names=", ".join(n for n in order if name in _providers_of(source.endpoints[n])),
-                    ),
-                    "rows": list_rows(source, infos[name]),
-                }
-                for name in source.providers
-            ],
         },
         "landing": {
             # The catalogue is rendered in the workbook; the document points at it and
@@ -758,7 +812,12 @@ def build(
         },
         "appendix": {
             "samples": [e["sample"] for e in endpoints if e["sample"]],
-            "workbook": {"file": workbook_file, "url": links["workbook"], "tabs": _tabs(order)},
+            "workbook": {
+                "file": workbook_file,
+                "url": links["workbook"],
+                "tabs": _tabs(order, value_lists),
+                "lists": value_lists,
+            },
         },
     }
     model["completeness"] = completeness(model, annotation, order)
@@ -769,18 +828,63 @@ def _providers_of(ep: Endpoint) -> set[str]:
     return {ref.marker.provider for ref in ep.markers()}
 
 
-def _tabs(order: list[str]) -> list[dict[str, str]]:
-    """The workbook's sheets, in order: the fixed ones, then one per endpoint."""
+def _value_lists(
+    source: Source, infos: Mapping[str, ProviderInfo]
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """One entry per list whose values are known, plus the map every mention points through.
+
+    `sheets` is keyed both by provider name and by the referential's path, because a lookup
+    table named in another provider's args is usually the very same file.
+    """
+    taken = {sheet_title(name).casefold() for name in source.endpoints}
+    taken |= {str(entry["name"]).casefold() for entry in L.section("workbook.sheets").values() if "{" not in str(entry["name"])}
+    entries: list[dict[str, Any]] = []
+    sheets: dict[str, str] = {}
+    for name, info in infos.items():
+        if info.kind != STATIC or not info.rows:
+            continue
+        title = unique_title(info.phrase, taken)
+        columns = list(info.fields) or sorted(info.rows[0])
+        entries.append(
+            {
+                # Positional, never the provider's name: nothing in the model may carry a
+                # word this repo invented, and a sheet key is still part of the model.
+                "key": f"list:{len(entries)}",
+                "name": info.phrase,
+                "sheet": title,
+                "columns": columns,
+                "rows": [[row.get(column) for column in columns] for row in info.rows],
+                "generated": info.generated_at,
+            }
+        )
+        sheets[name] = title
+        referential = referential_of(source.providers[name].args)
+        if referential:
+            sheets[referential] = title
+    return entries, sheets
+
+
+def _tabs(order: list[str], value_lists: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    """The workbook's sheets, in order: the fixed ones, the value lists, then the endpoints."""
     sheets = L.section("workbook.sheets")
     tabs = [
         {"key": key, "name": str(sheets[key]["name"]), "contents": str(sheets[key]["contents"]), "reader": str(sheets[key]["reader"])}
         for key in ("readme", "endpoints", "metadata")
     ]
+    for entry in value_lists:
+        tabs.append(
+            {
+                "key": entry["key"],
+                "name": entry["sheet"],
+                "contents": str(sheets["list"]["contents"]).format(list=entry["name"]),
+                "reader": str(sheets["list"]["reader"]),
+            }
+        )
     for name in order:
         tabs.append(
             {
                 "key": f"response:{name}",
-                "name": str(sheets["response"]["name"]).format(endpoint=name),
+                "name": sheet_title(str(sheets["response"]["name"]).format(endpoint=name)),
                 "contents": str(sheets["response"]["contents"]).format(endpoint=name),
                 "reader": str(sheets["response"]["reader"]),
             }

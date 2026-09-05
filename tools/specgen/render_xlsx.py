@@ -27,8 +27,9 @@ def render(model: Mapping[str, Any], out: Path) -> Path:
     workbook = Workbook()
     workbook.remove(workbook.active)
     by_name = {endpoint["name"]: endpoint for endpoint in model["endpoints"]}
+    by_key = {entry["key"]: entry for entry in model["appendix"]["workbook"]["lists"]}
     for tab in model["appendix"]["workbook"]["tabs"]:
-        sheet = workbook.create_sheet(_sheet_title(tab["name"]))
+        sheet = workbook.create_sheet(tab["name"])
         key = tab["key"]
         if key == "readme":
             _readme(sheet, model)
@@ -36,6 +37,8 @@ def render(model: Mapping[str, Any], out: Path) -> Path:
             _endpoints(sheet, model)
         elif key == "metadata":
             _metadata(sheet, model)
+        elif key.startswith("list:"):
+            _value_list(sheet, by_key[key])
         elif key.startswith("response:"):
             _endpoint_sheet(sheet, by_name[key.split(":", 1)[1]])
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -43,10 +46,19 @@ def render(model: Mapping[str, Any], out: Path) -> Path:
     return out
 
 
-def _sheet_title(name: str) -> str:
-    """Excel caps a sheet name at 31 characters and forbids a few of them."""
-    cleaned = "".join("_" if c in '[]:*?/\\' else c for c in name)
-    return cleaned[:31]
+def _value_list(sheet, entry: Mapping[str, Any]) -> None:
+    """A parameter list's actual values.
+
+    This is why the referential no longer travels as a JSON file: it is rows and columns,
+    the workbook is already being delivered, and a spreadsheet is where a table is read.
+    """
+    start = 1
+    if entry["generated"]:
+        sheet.cell(row=1, column=1, value=L.fmt("workbook.list.generated", date=entry["generated"])).font = Font(italic=True)
+        start = 3
+    _table(sheet, list(entry["columns"]), entry["rows"], start_row=start)
+    if not entry["rows"]:
+        sheet.cell(row=start + 1, column=1, value=str(L["workbook.list.empty"])).font = Font(italic=True)
 
 
 def _table(sheet, headers: Sequence[str], rows: Sequence[Sequence[Any]], start_row: int = 1) -> None:

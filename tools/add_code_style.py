@@ -149,12 +149,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _every_paragraph(document):
-    """Body paragraphs plus those inside tables, since callouts are one-cell tables."""
+    """Body paragraphs only.
+
+    Not the ones inside table cells, even where they are monospace: the style is a block
+    treatment — border bar, shading, hanging indent — and inside a narrow cell that reads
+    as damage rather than as code. A monospace cell keeps its runs as they are.
+    """
     yield from document.paragraphs
-    for table in document.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                yield from cell.paragraphs
 
 
 if __name__ == "__main__":

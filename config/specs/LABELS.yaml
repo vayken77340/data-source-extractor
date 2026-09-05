@@ -166,22 +166,26 @@ endpoint:
     scalar: "{type}"
   files: { page: un fichier par page, request: un fichier par requête }
 
-# How a parameter list is named and described (§4.3) — never by its provider's name.
+# How a parameter list is named and described, inside the section of the endpoint it
+# drives — never by its provider's name.
 lists:
   static: "{fields} du référentiel"
   chained: "enregistrement retourné par {method} {path}"
   chained_unknown: "enregistrement issu de {endpoint}"
   default_field: valeur
+  title: "Liste « {name} »"
   origin: Origine
-  origin_static: référentiel joint à ce document
   origin_chained: "réponses de {method} {path} déjà déposées"
-  attached: référentiel joint à ce document
-  referential: Référentiel
+  # A list whose values are known is a table, and its table is in the workbook.
+  values: Valeurs
+  in_sheet: "onglet « {sheet} » du classeur d'accompagnement"
+  generated: Référentiel généré le
+  lookup: Table de correspondance
+  attached: fichier joint à ce document
   value_of: "Valeur « {field} »"
   field_relative: "{path}   (relatif à l'enregistrement)"
   fields: Champs de chaque enregistrement
   meaning: Signification
-  used_by: "utilisée par : {names}"
   # Provider args rendered under a readable label; any other arg keeps its own name.
   args:
     path: Chemin des enregistrements
@@ -274,9 +278,13 @@ workbook:
       name: Metadata
       contents: Spécification normative des attributs de métadonnées
       reader: Ingénieurs d'ingestion
+    list:
+      name: "{list}"
+      contents: "Valeurs de la liste « {list} »"
+      reader: Ingénieurs d'ingestion
     response:
       name: "{endpoint}"
-      contents: "Structure de la réponse de {endpoint} : chemins, types, présence"
+      contents: "Requête et structure de la réponse de {endpoint}"
       reader: Équipe de modélisation (référence, pas un mapping)
   readme:
     columns: [Élément, Valeur]
@@ -311,6 +319,9 @@ workbook:
     pagination_cell: "{item} : {value}"
   metadata:
     columns: [Attribut, Type, Obligatoire, Description]
+  list:
+    generated: "Référentiel généré le {date}"
+    empty: "Aucune valeur."
   # An endpoint's sheet holds both directions, request above response.
   blocks:
     request: Paramètres de requête

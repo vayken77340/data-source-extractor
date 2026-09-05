@@ -37,10 +37,43 @@ def block(sheet, title: str) -> int:
     raise AssertionError(f"no block titled {title!r} in {sheet.title}")
 
 
-def test_sheets_are_the_fixed_three_then_one_per_endpoint(workbook):
+def test_sheets_are_the_fixed_three_then_the_lists_then_the_endpoints(workbook):
     built, book = workbook
     assert book.sheetnames == [tab["name"] for tab in built["appendix"]["workbook"]["tabs"]]
-    assert book.sheetnames == ["Readme", "Endpoints", "Metadata", "assets", "alarms", "tenant_info", "measures"]
+    assert book.sheetnames == [
+        "Readme", "Endpoints", "Metadata",
+        "types d'actifs",
+        "assets", "alarms", "tenant_info", "measures",
+    ]
+
+
+def test_a_value_list_ships_its_rows_rather_than_a_json_file(workbook):
+    """The referential is rows and columns; the workbook is already being delivered."""
+    _built, book = workbook
+    sheet = book["types d'actifs"]
+    assert header(sheet) == ["assetType"]
+    assert column(sheet, 1) == ["PUMP", "VALVE"]
+
+
+def test_a_generated_referential_carries_its_date(reference_source, reference_annotation, tmp_path, monkeypatch):
+    """A referential with no date is one nobody can tell is stale."""
+    import json as _json
+
+    referential = tmp_path / "config" / "params" / "kinds.json"
+    referential.parent.mkdir(parents=True)
+    referential.write_text(
+        _json.dumps({"generated_at": "2026-08-31T14:11:26Z", "columns": ["kind"], "rows": [{"kind": "PUMP"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    source = reference_source.model_copy(deep=True)
+    source.providers["asset_types"].args = {"path": "config/params/kinds.json", "columns": ["kind"]}
+    source.providers["asset_types"].fn = "param_file"
+    built = model.build(source, reference_annotation)
+    entry = built.model["appendix"]["workbook"]["lists"][0]
+    assert entry["generated"] == "31/08/2026"
+    book = load_workbook(render_xlsx.render(built.model, tmp_path / "a.xlsx"))
+    assert book[entry["sheet"]].cell(row=1, column=1).value == "Référentiel généré le 31/08/2026"
 
 
 def test_the_endpoints_sheet_has_the_configured_columns_and_no_more(workbook):
@@ -145,4 +178,9 @@ def test_no_sheet_and_no_cell_mentions_volumes(workbook):
 
 @pytest.mark.parametrize("name, expected", [("assets", "assets"), ("a/b:c?", "a_b_c_"), ("x" * 40, "x" * 31)])
 def test_sheet_titles_fit_excel(name, expected):
-    assert render_xlsx._sheet_title(name) == expected
+    assert model.sheet_title(name) == expected
+
+
+def test_two_lists_named_alike_get_distinct_sheets():
+    taken: set[str] = set()
+    assert [model.unique_title("liste", taken) for _ in range(3)] == ["liste", "liste 2", "liste 3"]

@@ -128,12 +128,28 @@ def test_the_marker_count_in_the_document_equals_the_model_count(built):
 
 
 def test_code_blocks_carry_the_code_style_not_direct_formatting(built):
-    """A block styled run by run cannot be restyled in Word, which the template is for."""
+    """A block styled run by run cannot be restyled in Word, which the template is for.
+
+    Table cells are the exception and keep plain monospace runs: the style is a block
+    treatment — border bar, shading, hanging indent — and inside a narrow cell it reads
+    as damage rather than as code.
+    """
     rendered = parts(render_docx.render_bytes(TEMPLATE, built))
     assert 'w:styleId="Code"' in rendered["word/styles.xml"]
-    document = rendered["word/document.xml"]
-    assert document.count('w:val="Code"') >= len(built["landing"]["example_lines"])
-    assert "Consolas" not in document
+    assert rendered["word/document.xml"].count('w:val="Code"') >= len(built["landing"]["example_lines"])
+    body = body_of(render_docx.render_bytes(TEMPLATE, built))
+    direct = [
+        "".join(t.text or "" for t in p.iter(f"{W}t"))
+        for p in body.findall(f"{W}p")
+        if any(f.get(f"{W}ascii") == "Consolas" for f in p.iter(f"{W}rFonts"))
+    ]
+    assert not direct, direct
+
+
+def test_the_code_style_never_lands_inside_a_table_cell(built):
+    body = body_of(render_docx.render_bytes(TEMPLATE, built))
+    in_cells = [s.get(f"{W}val") for table in body.findall(f"{W}tbl") for s in table.iter(f"{W}pStyle")]
+    assert "Code" not in in_cells
 
 
 def test_the_code_style_keeps_a_block_together_and_indents_wraps(built):
@@ -172,6 +188,19 @@ def test_the_request_shape_is_rendered_instead_of_a_parameter_table(built):
     assert "Corps de la requête, tel qu\'il part :" in text
     assert '"assetType": "<assetType>"' in text
     assert "Origine de la valeur" not in text  # the flat table moved to the workbook
+
+
+def test_every_endpoint_with_lists_renders_them(built):
+    """The block once sat inside the correlated-origins loop, so it appeared only for the
+    one endpoint that had such a note and vanished from the other three."""
+    body = paragraphs(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
+    texts = [text for _style, text in body]
+    with_lists = [e["name"] for e in built["endpoints"] if e["lists"]]
+    assert with_lists == ["assets", "alarms", "measures"]
+    assert texts.count("Listes de valeurs") == len(with_lists)
+    # No endpoint here has a correlation note, so with the block nested inside that loop
+    # the count above would be zero. That is exactly what the bug looked like.
+    assert not any(e["correlated_origins"] for e in built["endpoints"])
 
 
 def test_the_metadata_catalogue_moved_to_the_workbook(built):

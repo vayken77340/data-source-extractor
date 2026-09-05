@@ -363,10 +363,17 @@ one vocabulary in the request tables, the metadata contract and the response she
 Volumes are deliberately absent: how many rows one environment holds is not a fact the
 receiving team can use.
 
-The workbook has three fixed sheets — Readme, Endpoints, Metadata — and then one sheet
-per endpoint, named after it, holding both directions: the request's parameters above the
-response's fields. Response fields come from what a run observed, so run an extraction
-first or that block says so.
+The workbook has three fixed sheets — Readme, Endpoints, Metadata — then one sheet per
+parameter list holding its actual values, then one sheet per endpoint holding both
+directions: the request's parameters above the response's fields. Response fields come
+from what a run observed, so run an extraction first or that block says so.
+
+**A parameter list backed by a file ships as a sheet, not as an attachment.** A parameter
+file is rows and columns, the workbook is already being delivered, and a spreadsheet is
+where a table is read. The sheet carries the referential's generation date, so a reader
+can tell whether it is stale. A list read out of a previous endpoint's responses has no
+values to tabulate, so it keeps its recipe — which endpoint, which JSONPath, which join —
+in the section of the endpoint it drives.
 
 **The document shows the request's shape, not a table of dotted paths.** A nested body is
 printed as a body, with each value's origin in a column beside it, because

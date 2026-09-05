@@ -227,13 +227,31 @@ def test_the_dependency_tree_and_sequence(built):
     assert built.model["flow"]["sequence"][3]["after"] == "assets"
 
 
-def test_parameter_lists_are_named_and_described_generically(built):
-    lists = {entry["name"]: entry for entry in built.model["flow"]["lists"]}
-    assert lists["types d'actifs"]["used_by"] == "utilisée par : assets, alarms"
-    assert rows(lists["types d'actifs"]["rows"], "Origine") == ["référentiel joint à ce document"]
-    chained = lists["enregistrement retourné par POST /assets/search"]
-    assert rows(chained["rows"], "Origine") == ["réponses de POST /assets/search déjà déposées"]
-    assert rows(chained["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
+def test_a_list_backed_by_values_points_at_its_sheet(built):
+    """Its values are a table, so they are in the workbook and not described in prose."""
+    (entry,) = endpoint(built, "alarms")["lists"]
+    assert entry["name"] == "types d'actifs"
+    assert rows(entry["rows"], "Valeurs") == ["onglet « types d'actifs » du classeur d'accompagnement"]
+    assert rows(entry["rows"], "Origine") == []  # nothing left to say about where it lives
+
+
+def test_a_chained_list_keeps_its_recipe_beside_the_endpoint_it_drives(built):
+    """It has no values to tabulate, so the recipe is the whole of it."""
+    (entry,) = endpoint(built, "measures")["lists"]
+    assert entry["name"] == "enregistrement retourné par POST /assets/search"
+    assert rows(entry["rows"], "Origine") == ["réponses de POST /assets/search déjà déposées"]
+    assert rows(entry["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
+
+
+def test_a_list_is_described_under_every_endpoint_it_drives(built):
+    """assets and alarms share one list; each section stands on its own."""
+    for name in ("assets", "alarms"):
+        assert [e["name"] for e in endpoint(built, name)["lists"]] == ["types d'actifs"]
+    assert endpoint(built, "tenant_info")["lists"] == []
+
+
+def test_the_lists_no_longer_have_a_section_of_their_own(built):
+    assert "lists" not in built.model["flow"]
 
 
 # --- the request as it goes on the wire ----------------------------------------------
@@ -581,10 +599,28 @@ def test_a_long_response_is_cut_off_and_says_so(reference_source, reference_anno
     assert shape[-1].startswith("…") and "fichier joint" in shape[-1]
 
 
-def test_the_workbook_has_one_response_sheet_per_endpoint(built):
+def test_the_workbook_has_a_sheet_per_list_then_one_per_endpoint(built):
     tabs = built.model["appendix"]["workbook"]["tabs"]
-    assert [t["key"] for t in tabs] == ["readme", "endpoints", "metadata", "response:assets", "response:alarms", "response:tenant_info", "response:measures"]
-    assert [t["name"] for t in tabs] == ["Readme", "Endpoints", "Metadata", "assets", "alarms", "tenant_info", "measures"]
+    assert [t["key"] for t in tabs] == [
+        "readme", "endpoints", "metadata",
+        "list:0",
+        "response:assets", "response:alarms", "response:tenant_info", "response:measures",
+    ]
+    assert [t["name"] for t in tabs] == [
+        "Readme", "Endpoints", "Metadata", "types d'actifs",
+        "assets", "alarms", "tenant_info", "measures",
+    ]
+
+
+def test_a_value_list_carries_its_columns_and_rows(built):
+    (entry,) = built.model["appendix"]["workbook"]["lists"]
+    assert (entry["name"], entry["sheet"]) == ("types d'actifs", "types d'actifs")
+    assert entry["columns"] == ["assetType"] and entry["rows"] == [["PUMP"], ["VALVE"]]
+
+
+def test_a_chained_list_gets_no_sheet(built):
+    """There is nothing to tabulate: its values only exist once a run has happened."""
+    assert len(built.model["appendix"]["workbook"]["lists"]) == 1
 
 
 # --- the document never mentions the tool ------------------------------------------
