@@ -29,7 +29,9 @@ XML_PARTS = re.compile(r"^word/(document|header\d*|footer\d*)\.xml$")
 # purpose (`--allow-partial`), never by an edit that did not mean to.
 REQUIRED = {
     "the endpoint loop (`{%p for endpoint in endpoints %}`)": re.compile(r"for\s+endpoint\s+in\s+endpoints"),
-    "the metadata contract table (`landing.contract`)": re.compile(r"landing\.contract"),
+    # The attribute catalogue itself lives in the workbook now, so what the document must
+    # still carry is the pointer to it and a real landed file to check against.
+    "the metadata contract pointer (`landing.contract_pointer`)": re.compile(r"landing\.contract_pointer"),
     "the landing example (`landing.example_lines`)": re.compile(r"landing\.example_lines"),
 }
 

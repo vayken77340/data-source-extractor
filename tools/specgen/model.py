@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from api_extractor.config import graph
-from api_extractor.config.models import Endpoint, FromMarker, Source, placeholders
+from api_extractor.config.models import Endpoint, FromMarker, Paginate, Source, placeholders
 from api_extractor.config.validate import endpoint_params
 from api_extractor.http import pagination
 from api_extractor.http.client import Request, Response
@@ -204,7 +204,25 @@ def param_rows(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[dict[str
     rows.extend(_walk_params(ep.query, "query", "", None, infos))
     rows.extend(_walk_params(ep.payload, "payload", "", None, infos))
     rows.extend(_param(key, "label", "", marker, infos) for key, marker in ep.label.items())
+    if ep.paginate is not None:
+        rows.append(_cursor_row(ep.paginate))
     return rows
+
+
+def _cursor_row(paginate: Paginate) -> dict[str, str]:
+    """The page cursor is a parameter like any other.
+
+    It is declared under `paginate` rather than in the body, so walking the declared
+    query and payload misses it — and a reader working from the parameter list alone
+    would build a request with no cursor. It goes on the wire, so it goes in the list.
+    """
+    keys = paginate.at_keys
+    return {
+        "name": keys[-1],
+        "location": _location(paginate.at_root, ".".join(keys), nested=len(keys) > 1),
+        "type": str(L["types.json.integer"]),
+        "origin": str(L["endpoint.shape.cursor"]),
+    }
 
 
 def _walk_params(node: Any, root: str, prefix: str, key: str | None, infos) -> list[dict[str, str]]:
@@ -375,6 +393,33 @@ def query_shape(ep: Endpoint, infos: Mapping[str, ProviderInfo]) -> list[str] | 
             flat = json.dumps(_plain(value), ensure_ascii=False)
             pairs.append((f"{key} = {flat}", ""))
     return _aligned(pairs)
+
+
+def response_shape(sample: Any, redact: Sequence[str]) -> list[str] | None:
+    """A captured response body as JSON, lists cut to a couple of items.
+
+    Structure is the point, so a list needs enough items to show that they repeat and no
+    more. Long bodies are cut off with a notice pointing at the attached sample, which is
+    the complete one. The same masking as the attached file applies here.
+    """
+    if sample is None or sample.body is None:
+        return None
+    keep = int(L["limits.response_shape_items"])
+    body, _cut = ev.truncate_lists(sample.body, keep)
+    lines = _aligned(_json_lines(_leafed(ev.redact(body, redact))))
+    limit = int(L["limits.response_shape_lines"])
+    if len(lines) > limit:
+        lines = [*lines[:limit], L.fmt("endpoint.shape.truncated", count=keep)]
+    return lines
+
+
+def _leafed(node: Any) -> Any:
+    """A plain value tree as leaves with no note, so `_json_lines` can print it."""
+    if isinstance(node, Mapping):
+        return {key: _leafed(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_leafed(value) for value in node]
+    return _Leaf(json.dumps(node, ensure_ascii=False), "")
 
 
 def _plain(node: Any) -> Any:
@@ -583,7 +628,7 @@ def build(
                 "params": param_rows(ep, infos),
                 "payload_shape": payload_shape(ep, infos),
                 "query_shape": query_shape(ep, infos),
-                "detail": {"text": L.fmt("endpoint.detail", sheet=name), "url": links["workbook"]},
+                "response_shape": response_shape(sample, ann.sample.redact if ann.sample else ()),
                 "correlated_origins": correlated_origins(ep, infos),
                 "pagination": pagination_rows(ep) or None,
                 "iteration_title": str(L["endpoint.iteration_title.paginated" if ep.paginate else "endpoint.iteration_title.plain"]),
@@ -664,6 +709,10 @@ def build(
         "endpoints": endpoints,
         "flow": {
             "pagination_sentence": pagination_sentence,
+            # One pointer for the whole catalogue rather than one per endpoint: the
+            # workbook is a single file, and repeating its link under every endpoint says
+            # nothing new fourteen times.
+            "workbook_pointer": {"text": str(L["flow.workbook_pointer"]), "url": links["workbook"]},
             "tree": _tree(order, deps, dependents),
             "sequence": [
                 {
@@ -687,7 +736,13 @@ def build(
             ],
         },
         "landing": {
+            # The catalogue is rendered in the workbook; the document points at it and
+            # shows a real landed file instead, which is what a reader checks against.
             "contract": contract.rows(names),
+            "contract_pointer": {
+                "text": L.fmt("landing.contract_pointer", sheet=L["workbook.sheets.metadata.name"]),
+                "url": links["workbook"],
+            },
             "example": example,
             "example_endpoint": example_endpoint,
             "example_lines": json.dumps(example, ensure_ascii=False, indent=2).splitlines(),

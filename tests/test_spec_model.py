@@ -305,19 +305,59 @@ def test_an_endpoint_that_sends_nothing_has_no_shape(built):
 
 def test_the_shape_never_replaces_the_exhaustive_list(built):
     """The workbook still renders every parameter; the document shows the shape."""
-    assert [p["name"] for p in endpoint(built, "assets")["params"]] == ["assetType", "pageSize"]
+    assert [p["name"] for p in endpoint(built, "assets")["params"]] == ["assetType", "pageSize", "page"]
+
+
+def test_the_page_cursor_is_a_parameter_like_any_other(built):
+    """Declared under `paginate`, not in the body — so walking the body alone missed it,
+    and a reader working from the list would have built a request with no cursor."""
+    (cursor,) = [p for p in endpoint(built, "assets")["params"] if p["name"] == "page"]
+    assert cursor == {
+        "name": "page",
+        "location": "corps de la requête",
+        "type": "long",
+        "origin": "curseur de pagination, incrémenté à chaque page",
+    }
+    assert not [p for p in endpoint(built, "alarms")["params"] if p["name"] == "page"]
+
+
+def test_a_nested_cursor_carries_its_path():
+    source = inline(
+        {
+            "search": {
+                "method": "POST",
+                "path": "/search",
+                "payload": {"pageLink": {"pageSize": 100}},
+                "paginate": {"style": "page_number", "at": "payload.pageLink.page"},
+                "output": "o/p{page}.json",
+            }
+        }
+    )
+    (cursor,) = [p for p in endpoint(model.build(source, annotation_for(source)), "search")["params"] if p["name"] == "page"]
+    assert cursor["location"] == "corps de la requête (pageLink.page)"
 
 
 # --- links ---------------------------------------------------------------------------
 
 
 def test_a_filled_link_reaches_the_pointers_that_can_use_it(built):
-    assert built.model["links"]["workbook"] == "https://exemple.sharepoint.com/sites/data/Spec_Annexes.xlsx"
-    assert endpoint(built, "assets")["detail"] == {
-        "text": "Détail paramètre par paramètre : classeur d'accompagnement, onglet « assets ».",
-        "url": built.model["links"]["workbook"],
-    }
-    assert built.model["appendix"]["workbook"]["url"] == built.model["links"]["workbook"]
+    workbook = built.model["links"]["workbook"]
+    assert workbook == "https://exemple.sharepoint.com/sites/data/Spec_Annexes.xlsx"
+    assert built.model["appendix"]["workbook"]["url"] == workbook
+    assert built.model["flow"]["workbook_pointer"]["url"] == workbook
+    assert built.model["landing"]["contract_pointer"]["url"] == workbook
+
+
+def test_the_workbook_is_pointed_at_once_for_the_whole_catalogue(built):
+    """Repeating one file's link under every endpoint says nothing new each time."""
+    assert "un onglet par endpoint" in built.model["flow"]["workbook_pointer"]["text"]
+    assert not any("detail" in e for e in built.model["endpoints"])
+
+
+def test_the_contract_pointer_names_the_sheet_that_holds_it(built):
+    pointer = built.model["landing"]["contract_pointer"]["text"]
+    assert "onglet « Metadata »" in pointer and "Les noms font foi." in pointer
+    assert built.model["landing"]["contract"], "the catalogue itself still feeds the workbook"
 
 
 def test_a_link_nobody_has_filled_in_is_no_link(built):
@@ -514,6 +554,31 @@ def test_response_fields_record_what_came_back_in_iceberg_types(reference_source
     assert fields["$.data[].id"]["presence"] == pytest.approx(2 / 3)
     assert fields["$.data[].id"]["nullable"] is True  # absent from the empty VALVE page
     assert endpoint(built, "tenant_info")["response_fields"] == []
+
+
+def test_a_captured_response_is_shown_as_json_with_its_lists_cut(reference_source, reference_annotation, evidence):
+    """Structure is the point, so a list needs enough items to show that it repeats."""
+    built = model.build(reference_source, reference_annotation, evidence)
+    shape = endpoint(built, "assets")["response_shape"]
+    assert shape[0] == "{" and shape[-1] == "}"
+    assert '  "data": [' in shape
+    assert sum(1 for line in shape if line.strip() == "{") == 3  # the body plus two items
+    assert not any("secret-owner" in line for line in shape)  # annotation: sample.redact
+
+
+def test_an_endpoint_with_no_captured_response_has_no_shape(built):
+    assert all(e["response_shape"] is None for e in built.model["endpoints"])
+
+
+def test_a_long_response_is_cut_off_and_says_so(reference_source, reference_annotation):
+    saved = SavedOutput(
+        Path("output/reference/assets/PUMP_p0.json"),
+        build_envelope(reference_source, "assets", {"assetType": "PUMP"}, {f"k{i}": i for i in range(80)}),
+    )
+    built = model.build(reference_source, reference_annotation, ev.Evidence(envelopes={"assets": saved and [saved]}))
+    shape = endpoint(built, "assets")["response_shape"]
+    assert len(shape) == int(labels.L["limits.response_shape_lines"]) + 1
+    assert shape[-1].startswith("…") and "fichier joint" in shape[-1]
 
 
 def test_the_workbook_has_one_response_sheet_per_endpoint(built):

@@ -382,8 +382,15 @@ printed as a body, with each value's origin in a column beside it, because
 }
 ```
 
-The exhaustive parameter table lives in that endpoint's sheet, and the document points at
-it. So Word says what to send and why; the workbook is the field-by-field reference.
+The response gets the same treatment from a captured sample, with lists cut to a couple of
+items — enough to show that they repeat — and the same masking the attached sample file
+gets. The exhaustive tables live in that endpoint's sheet, and the document points at the
+workbook once, at the head of the endpoint catalogue. So Word says what to send and why;
+the workbook is the field-by-field reference for both directions.
+
+The metadata contract works the same way. Section 6.3 states that the attribute names are
+normative and points at the workbook's Metadata sheet for the full catalogue; the document
+itself shows a real landed file instead, which is what a reader checks against.
 
 **Links are yours to fill in.** The generator writes files, it does not publish them, so
 a SharePoint URL is only knowable after the upload. A `links` block in the annotation

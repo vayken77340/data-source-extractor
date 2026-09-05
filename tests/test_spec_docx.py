@@ -155,15 +155,16 @@ def test_a_filled_link_becomes_a_real_word_hyperlink(built):
 def test_a_document_without_links_still_renders(built):
     """Until the files are published, every pointer is the plain text it always was."""
     built["links"] = dict.fromkeys(built["links"])
-    for endpoint in built["endpoints"]:
-        endpoint["detail"]["url"] = None
     for row in built["related"]:
         row["url"] = None
     built["appendix"]["workbook"]["url"] = None
+    built["flow"]["workbook_pointer"]["url"] = None
+    built["landing"]["contract_pointer"]["url"] = None
     rendered = parts(render_docx.render_bytes(TEMPLATE, built))
     assert "<w:hyperlink" not in rendered["word/document.xml"]
-    text = "".join(TEXT_RE.findall(rendered["word/document.xml"]))
-    assert "classeur d\'accompagnement, onglet « assets »" in text
+    text = plain_text(rendered["word/document.xml"])
+    assert "un onglet par endpoint" in text
+    assert "onglet « Metadata »" in text
 
 
 def test_the_request_shape_is_rendered_instead_of_a_parameter_table(built):
@@ -171,6 +172,16 @@ def test_the_request_shape_is_rendered_instead_of_a_parameter_table(built):
     assert "Corps de la requête, tel qu\'il part :" in text
     assert '"assetType": "<assetType>"' in text
     assert "Origine de la valeur" not in text  # the flat table moved to the workbook
+
+
+def test_the_metadata_catalogue_moved_to_the_workbook(built):
+    """§6.3 points at the sheet and shows a landed file; the table itself is in Excel."""
+    text = plain_text(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
+    assert "onglet « Metadata »" in text
+    # The §6.4 example still shows every attribute, as a landed file rather than a table.
+    assert '"base_url":' in text and '"extracted_at":' in text
+    assert "Obligatoire" not in text  # the catalogue's own column header is gone
+    assert "Identifie l'API source." not in text  # its descriptions live in the workbook
 
 
 def test_nothing_test_specific_survived_into_the_template(built):

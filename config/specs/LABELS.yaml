@@ -10,6 +10,12 @@
 
 marker: "[À COMPLÉTER]"
 
+# How much of a captured response the document shows before deferring to the attached
+# file. Enough items to show that a list repeats, and no more.
+limits:
+  response_shape_items: 2
+  response_shape_lines: 40
+
 enums:
   status: { draft: brouillon, in_review: en revue, approved: approuvé }
   mode: { full: complet, incremental: incrémental }
@@ -121,8 +127,8 @@ endpoint:
     fixed: valeur fixe
     cursor: curseur de pagination, incrémenté à chaque page
     arrow: "←"
-  # The exhaustive table lives in the workbook; this points at it.
-  detail: "Détail paramètre par paramètre : classeur d'accompagnement, onglet « {sheet} »."
+    response_title: "Structure observée, sur une réponse réelle :"
+    truncated: "…   (extrait : listes tronquées à {count} éléments — réponse complète dans le fichier joint)"
   pagination:
     carried_by: Pagination portée par
     cursor: Emplacement du curseur
@@ -192,6 +198,10 @@ flow:
     Sur les {total} de cette source, {paged} pagine{plural} ({names}) ; les autres
     répondent en une seule fois.
   pagination_none: "Aucun des {total} de cette source ne pagine : chacun répond en une seule fois."
+  workbook_pointer: >-
+    Le détail paramètre par paramètre de chaque endpoint, ainsi que la structure complète
+    des réponses observées, figure dans le classeur d'accompagnement : un onglet par
+    endpoint.
   endpoint_word: endpoint
   driver_suffix: "   (pilote)"
 
@@ -204,6 +214,9 @@ landing:
     encryption: Chiffrement
   example_body: "la réponse de l'API pour cette page, verbatim"
   endpoint_names: "Nom logique de l'endpoint : {names}."
+  contract_pointer: >-
+    La liste complète des attributs, avec leur type et leur caractère obligatoire, figure
+    dans le classeur d'accompagnement, onglet « {sheet} ». Les noms font foi.
   # §6.3, keyed by attribute path. Every path the envelope writes needs an entry here and
   # every entry needs a path — tests/test_spec_contract.py enforces both directions.
   contract:
