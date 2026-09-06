@@ -465,9 +465,20 @@ two-layer defence as the log scrubber.
 **Code blocks in the document use a `Code` paragraph style**, so you restyle every JSON
 example, pseudocode block and key at once from Word's style pane. It carries the shading,
 the keep-with-next that stops a 33-line envelope splitting across a page, and the hanging
-indent that makes a long key's wrap read as a continuation. A template made before this
-existed gets the style with `python tools/add_code_style.py <template.docx>`, which edits
-it in place and keeps your other changes.
+indent that makes a long key's wrap read as a continuation.
+
+**A template from an older version is brought up to date in place:**
+
+```bash
+python tools/migrate_template.py config/specs/TEMPLATE.docx
+```
+
+It applies each change the generator has gained since, keeping your prose and your
+styling. Every edit is idempotent and anchored on text rather than position, so a re-run
+after a later pull is safe and your rewording is tolerated. An edit whose anchor you have
+removed is reported and skipped rather than guessed at, and the run continues with the
+rest. `--dry-run` shows what it would do. A test migrates the previous template and
+asserts it renders identically to the tracked one, so the migration cannot rot.
 
 `output/_docs/` is under `output/`, so it is gitignored: the samples are real data.
 

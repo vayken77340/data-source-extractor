@@ -24,6 +24,8 @@ pytest.importorskip("docxtpl")
 from specgen import render_docx  # noqa: E402
 
 TEMPLATE = REPO_ROOT / "config" / "specs" / "TEMPLATE.docx"
+# The last revision before the template changes `tools/migrate_template.py` applies.
+OLDER_TEMPLATE_REV = "46dde7c"
 TEXT_RE = re.compile(r"<w:t[^>]*>([^<]*)</w:t>")
 PARAGRAPH_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
 
@@ -364,3 +366,65 @@ def test_resolution_order(tmp_path):
     (root / "x.template.docx").write_bytes(b"")
     assert template.resolve("x", None, root) == root / "x.template.docx"
     assert template.resolve("x", Path("elsewhere.docx"), root) == Path("elsewhere.docx")
+
+
+# --- bringing an older template up to date -------------------------------------------
+
+
+def _older_template(tmp_path: Path) -> Path:
+    """The template as it was before this round of changes, fetched from git rather than
+    kept as a fixture — so this compares against what people actually have."""
+    import subprocess
+
+    older = tmp_path / "older.docx"
+    older.write_bytes(
+        subprocess.run(
+            ["git", "show", f"{OLDER_TEMPLATE_REV}:config/specs/TEMPLATE.docx"],
+            cwd=REPO_ROOT, capture_output=True, check=True,
+        ).stdout
+    )
+    return older
+
+
+def test_migrating_an_older_template_reproduces_the_tracked_one(built, tmp_path):
+    """The migration is only worth having if it lands exactly where the tracked one is."""
+    import migrate_template
+
+    older = _older_template(tmp_path)
+    assert migrate_template.main([str(older), "--no-backup"]) == 0
+    assert paragraphs(parts(render_docx.render_bytes(older, built))["word/document.xml"]) == paragraphs(
+        parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"]
+    )
+
+
+def test_migrating_twice_changes_nothing(tmp_path):
+    """Every edit is idempotent, so a re-run after a later pull is safe."""
+    import shutil
+
+    import migrate_template
+
+    once = tmp_path / "once.docx"
+    shutil.copy2(TEMPLATE, once)
+    assert migrate_template.main([str(once), "--no-backup"]) == 0
+    assert once.read_bytes() == TEMPLATE.read_bytes()
+
+
+def test_a_template_missing_an_anchor_reports_it_rather_than_guessing(tmp_path, capsys):
+    """Better one edit reported as undone than an edit guessed into the wrong place."""
+    import zipfile
+
+    import migrate_template
+
+    older = _older_template(tmp_path)
+    broken = tmp_path / "broken.docx"
+    with zipfile.ZipFile(older) as source, zipfile.ZipFile(broken, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "word/document.xml":
+                data = data.decode("utf-8").replace("landing.key_template", "landing.gone").encode("utf-8")
+            target.writestr(item, data)
+
+    assert migrate_template.main([str(broken), "--no-backup"]) == 1
+    printed = capsys.readouterr().out
+    assert "SKIPPED   paginated-key" in printed
+    assert "need doing by hand" in printed
