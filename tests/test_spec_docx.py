@@ -196,11 +196,23 @@ def test_every_endpoint_with_lists_renders_them(built):
     body = paragraphs(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
     texts = [text for _style, text in body]
     with_lists = [e["name"] for e in built["endpoints"] if e["lists"]]
-    assert with_lists == ["assets", "alarms", "measures"]
+    assert with_lists == ["measures"]
     assert texts.count("Listes de valeurs") == len(with_lists)
     # No endpoint here has a correlation note, so with the block nested inside that loop
     # the count above would be zero. That is exactly what the bug looked like.
     assert not any(e["correlated_origins"] for e in built["endpoints"])
+
+
+def test_a_chained_list_renders_its_skeleton(built):
+    text = plain_text(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
+    assert "Emplacement des valeurs dans la réponse déjà déposée :" in text
+    assert '"id": …   ← id' in text
+    assert "$.data[*].id.id" not in text  # the path itself is no longer printed
+
+
+def test_the_workbook_pointer_mentions_the_list_sheets(built):
+    text = plain_text(parts(render_docx.render_bytes(TEMPLATE, built))["word/document.xml"])
+    assert "un onglet par liste de valeurs" in text
 
 
 def test_the_metadata_catalogue_moved_to_the_workbook(built):

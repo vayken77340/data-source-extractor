@@ -371,9 +371,26 @@ from what a run observed, so run an extraction first or that block says so.
 **A parameter list backed by a file ships as a sheet, not as an attachment.** A parameter
 file is rows and columns, the workbook is already being delivered, and a spreadsheet is
 where a table is read. The sheet carries the referential's generation date, so a reader
-can tell whether it is stale. A list read out of a previous endpoint's responses has no
-values to tabulate, so it keeps its recipe — which endpoint, which JSONPath, which join —
-in the section of the endpoint it drives.
+can tell whether it is stale, and the document says nothing further about it — the
+request shape already names the list and the sheet holds the rest.
+
+A list read out of a previous endpoint's responses has no values to tabulate, so it keeps
+its recipe in the section of the endpoint it drives, and shows where each value sits as
+the parent response's own shape:
+
+```
+{
+  "data": [
+    {
+      "id": { "id": … }   ← id
+    }
+  ]
+}
+```
+
+That replaces a `$.data[*]` selector plus paths relative to each record, which asks a
+reader to hold two ideas at once. A path too rich to draw — a filter, a recursive descent
+— falls back to printing the path itself.
 
 **The document shows the request's shape, not a table of dotted paths.** A nested body is
 printed as a body, with each value's origin in a column beside it, because

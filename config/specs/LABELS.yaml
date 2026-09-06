@@ -205,7 +205,7 @@ flow:
   workbook_pointer: >-
     Le détail paramètre par paramètre de chaque endpoint, ainsi que la structure complète
     des réponses observées, figure dans le classeur d'accompagnement : un onglet par
-    endpoint.
+    endpoint, et un onglet par liste de valeurs.
   endpoint_word: endpoint
   driver_suffix: "   (pilote)"
 

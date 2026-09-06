@@ -17,6 +17,7 @@ document.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -147,7 +148,74 @@ def _phrase(source: Source, kind: str, targets: tuple[str, ...], fields: tuple[s
     return L.fmt("lists.static", fields=" / ".join(fields) if fields else L["lists.default_field"])
 
 
-def list_rows(source: Source, info: ProviderInfo, sheets: Mapping[str, str]) -> list[dict[str, str]]:
+VALUE_PLACEHOLDER = "…"
+_PATH_TOKEN = re.compile(r"\.([A-Za-z_][A-Za-z0-9_]*)|\[\*\]")
+
+
+def path_segments(json_path: str) -> list[str] | None:
+    """`$.data[*].id.id` -> `['data', '[]', 'id', 'id']`, or None if not a plain path.
+
+    Only the shape a skeleton can be drawn from: dotted names and whole-array steps. A
+    filter or a recursive descent has no single tree, so the caller falls back to printing
+    the path itself.
+    """
+    if not json_path.startswith("$"):
+        return None
+    rest, segments, position = json_path[1:], [], 0
+    while position < len(rest):
+        token = _PATH_TOKEN.match(rest, position)
+        if token is None:
+            return None
+        segments.append(token.group(1) or "[]")
+        position = token.end()
+    return segments or None
+
+
+def _graft(node: Any, segments: Sequence[str], leaf: _Leaf) -> Any:
+    """Put `leaf` at `segments`, growing the branches it needs and reusing what is there."""
+    if not segments:
+        return leaf
+    head, tail = segments[0], segments[1:]
+    if head == "[]":
+        inner = node[0] if isinstance(node, list) and node else {}
+        return [_graft(inner, tail, leaf)]
+    branch = node if isinstance(node, dict) else {}
+    branch[head] = _graft(branch.get(head, {}), tail, leaf)
+    return branch
+
+
+def response_skeleton(source: Source, info: ProviderInfo) -> list[str] | None:
+    """Where in the parent's response each value sits, as the response's own shape.
+
+    A reader following `$.data[*]` plus `$.id.id` has to hold two ideas at once: one
+    expression selects records, the others are relative to a record. The tree says it
+    structurally — the list, one element of it, the fields inside — and needs no JSONPath
+    fluency. None when a path is too rich to draw, and the paths are printed instead.
+    """
+    args = source.providers[info.name].args
+    base = path_segments(str(args.get("path", "")))
+    if base is None:
+        return None
+    tree: Any = {}
+    fields = args.get("fields")
+    if isinstance(fields, Mapping) and fields:
+        for name, relative in fields.items():
+            branch = path_segments(str(relative))
+            if branch is None:
+                return None
+            tree = _graft(tree, [*base, *branch], _Leaf(VALUE_PLACEHOLDER, name))
+    else:
+        # Named after the last identifier in the path, the rule the provider itself uses
+        # — and the one `bind: {id: ...}` matches on. Read off the path rather than off a
+        # provider that may not have been able to run.
+        names = [segment for segment in base if segment != "[]"]
+        tree = _graft(tree, base, _Leaf(VALUE_PLACEHOLDER, names[-1] if names else str(L["lists.default_field"])))
+    return _aligned(_json_lines(tree))
+
+
+def list_rows(
+    source: Source, info: ProviderInfo, sheets: Mapping[str, str], *, with_paths: bool = True
+) -> list[dict[str, str]]:
     """How to obtain one parameter list, in terms the receiving team can act on.
 
     A list whose values come from a file has those values in the workbook, so this says
@@ -171,13 +239,20 @@ def list_rows(source: Source, info: ProviderInfo, sheets: Mapping[str, str]) -> 
         if isinstance(value, str) and value in source.endpoints:
             continue
         if isinstance(value, str) and _is_referential(value):
+            if info.kind == STATIC:
+                continue  # this file *is* the values, and the row above already said so
             # The lookup table is a referential too, and it usually *is* one of the lists
             # that already has a sheet — so point at that sheet rather than describing it.
             sheet = sheets.get(value)
             rows.append(_row(L["lists.lookup"], L.fmt("lists.in_sheet", sheet=sheet) if sheet else L["lists.attached"]))
-        elif key == "fields" and isinstance(value, Mapping):
-            for field_name, path in value.items():
-                rows.append(_row(L.fmt("lists.value_of", field=field_name), L.fmt("lists.field_relative", path=path)))
+        elif key in ("path", "fields"):
+            if not with_paths:
+                continue  # the skeleton shows this, and shows it better
+            if key == "fields" and isinstance(value, Mapping):
+                for field_name, path in value.items():
+                    rows.append(_row(L.fmt("lists.value_of", field=field_name), L.fmt("lists.field_relative", path=path)))
+            else:
+                rows.append(_row(arg_labels.get(key, key), str(value)))
         elif key in ("values", "columns"):
             continue  # what the list holds is the sheet's business, not a row here
         elif isinstance(value, list):
@@ -189,6 +264,15 @@ def list_rows(source: Source, info: ProviderInfo, sheets: Mapping[str, str]) -> 
     if info.note:
         rows.append(_row(L["lists.meaning"], info.note))
     return rows
+
+
+def _list_entry(source: Source, info: ProviderInfo, sheets: Mapping[str, str]) -> dict[str, Any]:
+    skeleton = response_skeleton(source, info) if info.kind == CHAINED else None
+    return {
+        "name": info.phrase,
+        "rows": list_rows(source, info, sheets, with_paths=skeleton is None),
+        "skeleton": skeleton,
+    }
 
 
 def _is_referential(value: str) -> bool:
@@ -690,9 +774,12 @@ def build(
                 # chained one keeps its recipe, and feeds one endpoint almost by
                 # construction, so nothing is duplicated by putting it here.
                 "lists": [
-                    {"name": infos[provider].phrase, "rows": list_rows(source, infos[provider], sheets)}
+                    _list_entry(source, infos[provider], sheets)
                     for provider in sorted(_providers_of(ep))
-                    if provider in infos
+                    # A list backed by a sheet has nothing to explain: the request shape
+                    # already names it and the sheet carries its values and its date. Only
+                    # a recipe, or a note somebody wrote, earns a block here.
+                    if provider in infos and (infos[provider].kind == CHAINED or infos[provider].note)
                 ],
                 "correlated_origins": correlated_origins(ep, infos),
                 "pagination": pagination_rows(ep) or None,

@@ -227,27 +227,115 @@ def test_the_dependency_tree_and_sequence(built):
     assert built.model["flow"]["sequence"][3]["after"] == "assets"
 
 
-def test_a_list_backed_by_values_points_at_its_sheet(built):
-    """Its values are a table, so they are in the workbook and not described in prose."""
+def test_a_list_backed_by_a_sheet_gets_no_block(built):
+    """The request shape already names it and the sheet carries its values and its date,
+    so a block would restate two things the reader can see and add a heading to do it."""
+    for name in ("assets", "alarms", "tenant_info"):
+        assert endpoint(built, name)["lists"] == [], name
+    assert [entry["name"] for entry in endpoint(built, "measures")["lists"]] == [
+        "enregistrement retourné par POST /assets/search"
+    ]
+
+
+def test_a_note_earns_a_block_even_for_a_list_backed_by_a_sheet(reference_source, reference_annotation):
+    """Somebody wrote it, so it has to land somewhere."""
+    reference_annotation.lists["asset_types"].note = "Le référentiel exclut les actifs retirés."
+    built = model.build(reference_source, reference_annotation)
     (entry,) = endpoint(built, "alarms")["lists"]
-    assert entry["name"] == "types d'actifs"
     assert rows(entry["rows"], "Valeurs") == ["onglet « types d'actifs » du classeur d'accompagnement"]
-    assert rows(entry["rows"], "Origine") == []  # nothing left to say about where it lives
+    assert rows(entry["rows"], "Signification") == ["Le référentiel exclut les actifs retirés."]
+    assert entry["skeleton"] is None
 
 
-def test_a_chained_list_keeps_its_recipe_beside_the_endpoint_it_drives(built):
-    """It has no values to tabulate, so the recipe is the whole of it."""
+def test_a_static_list_is_never_given_a_lookup_table(reference_source, reference_annotation):
+    """Its file is its own values, which the row above already says."""
+    reference_annotation.lists["asset_types"].note = "x"
+    built = model.build(reference_source, reference_annotation)
+    (entry,) = endpoint(built, "alarms")["lists"]
+    assert rows(entry["rows"], "Table de correspondance") == []
+
+
+def test_a_chained_list_shows_where_its_values_sit_in_the_parent_response(built):
+    """A reader following `$.data[*]` plus a relative `$.id.id` has to hold two ideas at
+    once. The tree says it structurally, and needs no JSONPath fluency."""
     (entry,) = endpoint(built, "measures")["lists"]
-    assert entry["name"] == "enregistrement retourné par POST /assets/search"
+    assert entry["skeleton"] == [
+        "{",
+        '  "data": [',
+        "    {",
+        '      "id": {',
+        '        "id": …   ← id',
+        "      }",
+        "    }",
+        "  ]",
+        "}",
+    ]
     assert rows(entry["rows"], "Origine") == ["réponses de POST /assets/search déjà déposées"]
-    assert rows(entry["rows"], "Chemin des enregistrements") == ["$.data[*].id.id"]
+    # The paths are the skeleton's job now, and it does it better.
+    assert rows(entry["rows"], "Chemin des enregistrements") == []
 
 
-def test_a_list_is_described_under_every_endpoint_it_drives(built):
-    """assets and alarms share one list; each section stands on its own."""
-    for name in ("assets", "alarms"):
-        assert [e["name"] for e in endpoint(built, name)["lists"]] == ["types d'actifs"]
-    assert endpoint(built, "tenant_info")["lists"] == []
+def test_several_fields_off_one_record_share_the_tree():
+    source = inline(
+        {
+            "a": {"method": "GET", "path": "/a/{id}", "bind": {"id": {"from": "rows"}}, "output": "o/{id}.json"},
+            "parent": {"method": "GET", "path": "/parent"},
+        },
+        {
+            "rows": {
+                "fn": "from_output",
+                "args": {
+                    "endpoint": "parent",
+                    "path": "$.items[*]",
+                    "fields": {"id": "$.key.id", "name": "$.label"},
+                },
+            }
+        },
+    )
+    (entry,) = endpoint(model.build(source, annotation_for(source)), "a")["lists"]
+    assert [line.split("←")[0].rstrip() for line in entry["skeleton"]] == [
+        "{",
+        '  "items": [',
+        "    {",
+        '      "key": {',
+        '        "id": …',
+        "      },",
+        '      "label": …',
+        "    }",
+        "  ]",
+        "}",
+    ]
+    assert [line.split("←")[1].strip() for line in entry["skeleton"] if "←" in line] == ["id", "name"]
+
+
+def test_a_path_too_rich_to_draw_falls_back_to_printing_it():
+    """A filter has no single tree. Better an honest path than a wrong picture."""
+    source = inline(
+        {
+            "a": {"method": "GET", "path": "/a/{id}", "bind": {"id": {"from": "rows"}}, "output": "o/{id}.json"},
+            "parent": {"method": "GET", "path": "/parent"},
+        },
+        {"rows": {"fn": "from_output", "args": {"endpoint": "parent", "path": "$.items[?(@.live)].id"}}},
+    )
+    (entry,) = endpoint(model.build(source, annotation_for(source)), "a")["lists"]
+    assert entry["skeleton"] is None
+    assert rows(entry["rows"], "Chemin des enregistrements") == ["$.items[?(@.live)].id"]
+
+
+@pytest.mark.parametrize(
+    "json_path, expected",
+    [
+        ("$.data[*].id.id", ["data", "[]", "id", "id"]),
+        ("$.a", ["a"]),
+        ("$[*]", ["[]"]),
+        ("$.items[?(@.live)]", None),
+        ("$..id", None),
+        ("data.id", None),
+        ("$", None),
+    ],
+)
+def test_which_paths_can_be_drawn(json_path, expected):
+    assert model.path_segments(json_path) == expected
 
 
 def test_the_lists_no_longer_have_a_section_of_their_own(built):
