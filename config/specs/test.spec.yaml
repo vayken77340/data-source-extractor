@@ -75,6 +75,9 @@ endpoints:
       - "[À COMPLÉTER — l'identifiant d'actif est-il stable dans le temps ?]"
 
   measures:
+    # The default key folds every parameter into {slug}, which here would append the
+    # measure types to the file name. The asset id is what identifies the file.
+    key: "source={source}/entity={endpoint}/extract_date={extract_date}/{id}.json"
     purpose: "Mesures d'un actif, restreintes aux grandeurs que son type déclare."
     record_grain: "[À COMPLÉTER — définition de point de mesure ou relevé ?]"
     quirks:

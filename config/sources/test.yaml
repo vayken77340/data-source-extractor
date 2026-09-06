@@ -25,17 +25,13 @@ providers:
     args: { path: config/params/asset_types.json, columns: [assetType] }
   asset_measures:
     # Each asset id, paired with the measure types its own assetType selects.
-    # `on` is the join: a column in the file, and the param recorded on the envelope.
+    # `join_on` is the join: a column in the file, and the param recorded on the envelope.
     fn: from_output_joined
     args:
       endpoint: assets
-      # `path` picks the records; `fields` pulls several values off each one, so the id and
-      # the name stay on the same row. Two paths over the whole body would drift apart the
-      # first time a record had no name.
-      path: "$.data[*]"
-      fields:
-        id: "$.id.id"
-        assetName: "$.latest.ENTITY_FIELD.name.value"
+      # One value per row, so no `fields` block: the field is named after the last
+      # identifier in the path, which is what `bind: {id: ...}` matches on.
+      path: "$.data[*].id.id"
       file: config/params/asset_types.json
       join_on: assetType     # also carried onto every row, under this name
       select: measureType
@@ -72,14 +68,12 @@ endpoints:
     method: GET
     path: /assets/{id}/measures
     bind:
-      id: { from: asset_measures }      # `fields.id`
+      id: { from: asset_measures }
     query:
       # `as` because the row's field is named after `select`, not after this key.
       keys: { from: asset_measures, as: measureType }   # "temperature,humidity"
-    label:
-      # Resolved like any other marker but never sent — these only shape the path below,
-      # and are recorded in the envelope's metadata.params.
-      assetType: { from: asset_measures }
-      assetName: { from: asset_measures }
     limit: 20
-    output: output/{source}/measures/{assetType}/{assetName}.json
+    # The id identifies the file, and it is the only thing that has to. A `label` could
+    # add the asset's type or name here, but neither is sent and neither is needed to
+    # find the file again — the asset's own envelope already records its type.
+    output: output/{source}/measures/{id}.json
